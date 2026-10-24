@@ -6,7 +6,8 @@ import { withMenuDescription } from '../../../menu-descriptions.js';
 import { connectPrinter, connectedPrinter, encodeKitchenSlip, encodeReceipt, joinPrints, sendToPrinter, type PrintMethod } from '../printing/escpos';
 
 import { ConnectTablets } from './ConnectTablets';
-import { MenuItemCard } from './MenuItemCard';
+import { MenuGroupCard } from './MenuGroupCard';
+import { groupMenu, SECTIONS, sectionOf } from './menuGroups';
 import { usePosData } from './usePosData';
 import { api, logout } from '../shared/api';
 import { localDay, money, rid, time } from '../shared/format';
@@ -115,16 +116,16 @@ export function Pos({ role }: { role: 'pos' | 'barista' }) {
         <section className="pay-panel"><div className="pay-total"><span>To pay</span><strong>{money(total)}</strong></div>{payArea}<p className="status" role="status">{status}</p></section>
       </div>}
       {view==='menu'&&!showSeats&&!showPay&&<div className="view menu-layout">
-        <aside className="menu-sidebar"><h2>Categories</h2><nav className="categories" aria-label="Menu categories">{[...categories,...(items.some(i=>!i.available)?['Unavailable']:[])].map(c=><button key={c} className={`chip ${category===c?'active':''}`} aria-pressed={category===c} onClick={()=>{setCategory(c);setQuery('');}}>{c}</button>)}</nav></aside>
+        <aside className="menu-sidebar"><nav className="categories" aria-label="Menu categories">{(()=>{const chip=(c:string,label=c)=><button key={c} className={`chip ${category===c?'active':''}`} aria-pressed={category===c} onClick={()=>{setCategory(c);setQuery('');}}>{label}</button>;return <>{chip('All','Everything')}{SECTIONS.map(section=>{const list=categories.slice(1).filter(c=>sectionOf(c)===section);return list.length?<div className="cat-section" key={section} role="group" aria-label={section}><span className="cat-section-name">{section}</span>{list.map(c=>chip(c))}</div>:null;})}{items.some(i=>!i.available)&&chip('Unavailable','Sold out')}</>;})()}</nav></aside>
         <div className="menu-content">
         {seatsFirst&&!editing&&<div className="order-for"><strong>{table?table.name:'Takeout'}</strong>{table&&<><span className="qty guests" aria-label="Guests"><button aria-label="One fewer guest" onClick={()=>setTable({...table,guests:Math.max(1,table.guests-1)})}>−</button><span>{table.guests} guest{table.guests===1?'':'s'}</span><button aria-label="One more guest" onClick={()=>setTable({...table,guests:Math.min(50,table.guests+1)})}>+</button></span>{(['vip','repeat'] as const).map(v=><button key={v} className={`chip ${table.tag===v?'active':''}`} aria-pressed={table.tag===v} onClick={()=>setTable({...table,tag:table.tag===v?null:v})}>{tagName(v)}</button>)}</>}<button className="btn small" onClick={()=>setStep('seats')}>Change table</button></div>}
-        <div className="tools"><input className="search" type="search" aria-label="Search the menu" placeholder="Search the menu" value={query} onChange={e=>setQuery(e.target.value)}/><button className={`btn small ${availabilityMode?'primary':''}`} onClick={()=>setAvailabilityMode(!availabilityMode)}>{availabilityMode?'Done':'Availability'}</button></div>
-        {availabilityMode&&<p className="avail-hint">Tap an item to mark it available or sold out. Hold an item to read its description.</p>}
+        <div className="tools"><div className="search-box"><input className="search" type="search" aria-label="Search the menu" placeholder="Search the menu" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button type="button" className="search-clear" aria-label="Clear search" onClick={()=>setQuery('')}>×</button>}</div><button className={`btn small ${availabilityMode?'primary':''}`} onClick={()=>setAvailabilityMode(!availabilityMode)}>{availabilityMode?'Done':'Mark sold out'}</button></div>
+        {availabilityMode&&<p className="avail-hint">Tap an item to mark it sold out or available again, then tap Done.</p>}
         <div className="menu-grid">
           {shownCategories.map(name=><React.Fragment key={name}>
             <div className="menu-category-heading"><h2>{name}</h2>{name==='Whiskey'&&<span>30 ml per shot (approximately 1 oz)</span>}</div>
-            {shownItems.filter(item=>item.category===name).map(item=><MenuItemCard key={item.id} item={item} availabilityMode={availabilityMode} expanded={detailsItemId===item.id} onAvailability={()=>void addAvailable(item,!item.available)} onDetails={()=>setDetailsItemId(item.id)} onClose={()=>setDetailsItemId(null)} onAdd={()=>setQty(item.id,1)}/>)}
-            {shownPending.filter(item=>item.category===name).map(item=><MenuItemCard key={`pending-${item.id}`} item={item} pending availabilityMode={availabilityMode} expanded={detailsItemId===item.id} onAvailability={()=>{}} onDetails={()=>setDetailsItemId(item.id)} onClose={()=>setDetailsItemId(null)} onAdd={()=>{}}/>)}
+            {groupMenu(shownItems.filter(item=>item.category===name)).map(g=><MenuGroupCard key={g.key} group={g} qtyOf={id=>cart[id]??0} availabilityMode={availabilityMode} expanded={detailsItemId===g.items[0].item.id} onAvailability={item=>void addAvailable(item,!item.available)} onDetails={()=>setDetailsItemId(g.items[0].item.id)} onClose={()=>setDetailsItemId(null)} onAdd={item=>setQty(item.id,1)}/>)}
+            {groupMenu(shownPending.filter(item=>item.category===name)).map(g=><MenuGroupCard key={`pending-${g.key}`} group={g} pending qtyOf={()=>0} availabilityMode={availabilityMode} expanded={detailsItemId===g.items[0].item.id} onAvailability={()=>{}} onDetails={()=>setDetailsItemId(g.items[0].item.id)} onClose={()=>setDetailsItemId(null)} onAdd={()=>{}}/>)}
           </React.Fragment>)}
           {!shownCategories.length&&<p className="empty grid-empty">No items match your search.</p>}
         </div>
