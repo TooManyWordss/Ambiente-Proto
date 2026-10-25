@@ -10,6 +10,11 @@ fi
 # Keeps Android from putting Termux to sleep while the café is open.
 termux-wake-lock 2>/dev/null || true
 
+# Stop a café server that is already running (an older version after an update, or one started by
+# Termux:Boot), so this one can use port 3000 and the tablet shows the version just installed.
+for pid in $(pgrep -f 'termux/start.sh' 2>/dev/null); do [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ] && kill "$pid" 2>/dev/null; done
+pkill -f 'node --env-file-if-exists=.env server.js' 2>/dev/null && sleep 1
+
 # This tablet's address on the café Wi-Fi, its own hotspot or Bluetooth tethering, for the kitchen's QR code.
 # Android hides it from the server, and some Android versions block one way of asking, so try several.
 find_ip() {
