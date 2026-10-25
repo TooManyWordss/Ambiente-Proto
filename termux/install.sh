@@ -60,7 +60,11 @@ main() {
   fi
 
   echo "== 5/5 Shortcuts =="
-  grep -q "alias cafe=" "$HOME/.bashrc" 2>/dev/null || echo "alias cafe='bash \"$APP_DIR/termux/start.sh\"'" >> "$HOME/.bashrc"
+  # "cafe" is a real command (not a shell alias), so it works in every Termux session and always starts
+  # this install. An alias left by an earlier setup would hide it, so remove any.
+  sed -i '/alias cafe=/d' "$HOME/.bashrc" 2>/dev/null || true
+  printf '#!/data/data/com.termux/files/usr/bin/bash\nexec bash "%s/termux/start.sh" "$@"\n' "$APP_DIR" > "$PREFIX/bin/cafe"
+  chmod +x "$PREFIX/bin/cafe"
   mkdir -p "$HOME/.termux/boot"   # used by the Termux:Boot app, if installed: starts the café when the tablet turns on
   printf '#!/data/data/com.termux/files/usr/bin/bash\nbash "%s/termux/start.sh"\n' "$APP_DIR" > "$HOME/.termux/boot/start-cafe"
   chmod +x "$HOME/.termux/boot/start-cafe"
