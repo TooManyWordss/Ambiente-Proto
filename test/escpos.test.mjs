@@ -50,3 +50,43 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   assert.equal(both.length, receipt.length + slip.length);
   assert.ok(text(both).indexOf('Cash') < text(both).indexOf('KITCHEN'), 'receipt first, then the kitchen slip');
 });
+
+test('Bluetooth printing sends 20-byte pieces, reconnects after a drop and never prints a piece twice', async () => {
+  const { connectPrinter, sendToPrinter } = await import('../client/src/printing/escpos.ts');
+  // A pretend BLE printer: each connection gives a new characteristic, like a real one.
+  const written = [], plan = { failNext: false, failAfter: Infinity };
+  let connections = 0;
+  const device = { name: 'Fake 58H', listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; },
+    gatt: { connected: false, async connect() { connections++; this.connected = true; return server; }, disconnect() { this.connected = false; } } };
+  const characteristic = () => ({ uuid: 'ff02', properties: { writeWithoutResponse: true },
+    async writeValueWithoutResponse(chunk) {
+      if (plan.failNext) { plan.failNext = false; throw new Error('GATT operation failed for unknown reason.'); }
+      if (written.length >= plan.failAfter) throw new Error('GATT operation failed for unknown reason.');
+      written.push([...chunk]);
+    } });
+  const server = { async getPrimaryService(uuid) { if (uuid !== '000018f0-0000-1000-8000-00805f9b34fb') throw new Error('no'); return { getCharacteristics: async () => [characteristic()], getCharacteristic: async () => characteristic() }; } };
+  Object.defineProperty(globalThis.navigator, 'bluetooth', { value: { requestDevice: async () => device }, configurable: true });
+
+  assert.equal(await connectPrinter('ble'), 'Fake 58H');
+  const receipt = encodeReceipt({ label: '1003', items: [{ name: 'Sweet Corn', qty: 2, unit_price_cents: 9000 }], total_cents: 18000 }, settings, { columns: 32, cut: false, drawer: false });
+  await sendToPrinter('ble', receipt);
+  assert.ok(written.every(c => c.length <= 20), 'every piece fits a 20-byte packet');
+  assert.deepEqual(written.flat(), [...receipt], 'the printer got the receipt exactly once, in order');
+
+  // The printer slept: the next print reconnects and uses the new connection.
+  written.length = 0; device.gatt.connected = false; device.listeners.gattserverdisconnected?.();
+  await sendToPrinter('ble', receipt);
+  assert.deepEqual(written.flat(), [...receipt]);
+  assert.equal(connections, 2);
+
+  // The very first piece fails: one fresh connection, then the whole receipt.
+  written.length = 0; plan.failNext = true;
+  await sendToPrinter('ble', receipt);
+  assert.deepEqual(written.flat(), [...receipt]);
+
+  // Failing halfway stops with a clear message rather than printing the first half again.
+  written.length = 0; plan.failAfter = 3;
+  await assert.rejects(sendToPrinter('ble', receipt), /Switch the printer off and on/);
+  assert.equal(written.length, 3);
+  delete globalThis.navigator.bluetooth;
+});

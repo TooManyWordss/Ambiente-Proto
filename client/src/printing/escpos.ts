@@ -149,14 +149,42 @@ async function sendUsb(bytes: Uint8Array) {
 // --- Bluetooth Low Energy (Web Bluetooth) ---
 // Services that BLE receipt printers commonly use for print data.
 const BLE_SERVICES = ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ffe0-0000-1000-8000-00805f9b34fb'];
-let bleWriter: { characteristic: any; name: string } | null = null;
+// The printer chosen with Connect. Its characteristic is looked up again whenever the link has dropped
+// (printer asleep, switched off, out of range), because the old one is dead after a reconnect.
+let bleTarget: { device: any; service: string; characteristic: string; name: string } | null = null;
+let bleChar: any = null;
+async function bleCharacteristic() {
+  const { device, service, characteristic } = bleTarget!;
+  if (!bleChar || !device.gatt.connected) {
+    const server = await device.gatt.connect();
+    bleChar = await (await server.getPrimaryService(service)).getCharacteristic(characteristic);
+  }
+  return bleChar;
+}
+// Cheap 58 mm printers take 20 bytes per write (the smallest Bluetooth packet) and have a small buffer,
+// so the receipt goes in 20-byte pieces with a short pause every few pieces.
+export const BLE_CHUNK = 20;
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function sendBle(bytes: Uint8Array) {
-  if (!bleWriter) throw new Error('Bluetooth printer not connected. Open Printer settings and tap Connect.');
-  const c = bleWriter.characteristic;
-  if (!c.service.device.gatt.connected) await c.service.device.gatt.connect();
-  for (let i = 0; i < bytes.length; i += 100) {
-    const chunk = bytes.slice(i, i + 100);
-    if (c.properties.writeWithoutResponse) await c.writeValueWithoutResponse(chunk); else await c.writeValue(chunk);
+  if (!bleTarget) throw new Error('Bluetooth printer not connected. Open Printer settings and tap Connect.');
+  for (let attempt = 1; ; attempt++) {
+    let sent = 0;
+    try {
+      const c = await bleCharacteristic();
+      for (; sent < bytes.length; sent += BLE_CHUNK) {
+        const chunk = bytes.slice(sent, sent + BLE_CHUNK);
+        if (c.properties.writeWithoutResponse) await c.writeValueWithoutResponse(chunk);
+        else await (c.writeValueWithResponse ? c.writeValueWithResponse(chunk) : c.writeValue(chunk));
+        if ((sent / BLE_CHUNK) % 8 === 7) await pause(20);
+      }
+      return;
+    } catch (e) {
+      bleChar = null;
+      // A fresh connection usually fixes a failure on the first piece. Retrying after part of the
+      // receipt printed would print that part twice, so then it stops and says so.
+      if (sent === 0 && attempt === 1) continue;
+      throw new Error(`Bluetooth printer stopped (${(e as Error).message}). Switch the printer off and on, then tap Connect in Printer settings.`);
+    }
   }
 }
 
@@ -172,11 +200,12 @@ export async function connectPrinter(method: PrintMethod): Promise<string> {
     if (!bluetooth) throw new Error('This browser cannot use Bluetooth printers. Use Chrome over HTTPS, or the RawBT app.');
     const device = await bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
     const server = await device.gatt.connect();
+    device.addEventListener?.('gattserverdisconnected', () => { bleChar = null; });
     for (const uuid of BLE_SERVICES) {
       try {
         const service = await server.getPrimaryService(uuid);
         const characteristic = (await service.getCharacteristics()).find((c: any) => c.properties.write || c.properties.writeWithoutResponse);
-        if (characteristic) { bleWriter = { characteristic, name: device.name || 'Bluetooth printer' }; return bleWriter.name; }
+        if (characteristic) { bleTarget = { device, service: uuid, characteristic: characteristic.uuid, name: device.name || 'Bluetooth printer' }; bleChar = characteristic; return bleTarget.name; }
       } catch { /* not this service */ }
     }
     device.gatt.disconnect();
@@ -187,7 +216,7 @@ export async function connectPrinter(method: PrintMethod): Promise<string> {
 
 export function connectedPrinter(method: PrintMethod) {
   if (method === 'usb') return usbDevice?.device.productName ?? null;
-  if (method === 'ble') return bleWriter?.name ?? null;
+  if (method === 'ble') return bleTarget?.name ?? null;
   return null;
 }
 
