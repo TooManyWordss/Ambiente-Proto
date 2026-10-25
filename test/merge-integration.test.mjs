@@ -72,3 +72,15 @@ test('a floor seeded before the balcony grew gets Balcony 3 and 4 once, beside t
     assert.deepEqual(['Table 2', 'Table 3'].map(n => { const t = tables.find(x => x.name === n); return [t.x, t.y]; }), [[316, 143], [400, 400]]);
   } finally { await server.close(); }
 });
+
+test('after an update the screens tell staff to restart the café server', async () => {
+  const index = path.resolve(import.meta.dirname, '..', 'dist', 'index.html');
+  const server = await launch(), before = (await import('node:fs')).statSync(index);
+  const { utimesSync } = await import('node:fs');
+  try {
+    assert.deepEqual((await server.request('/api/version')).data, { restartNeeded: false });
+    // New screens land on disk (the installer unpacked an update) while the old server keeps running.
+    utimesSync(index, before.atime, new Date(before.mtimeMs + 60_000));
+    assert.deepEqual((await server.request('/api/version')).data, { restartNeeded: true });
+  } finally { utimesSync(index, before.atime, before.mtime); await server.close(); }
+});

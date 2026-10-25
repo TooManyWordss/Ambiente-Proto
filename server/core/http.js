@@ -1,5 +1,6 @@
 import express from 'express';
 import { createServer } from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { Server } from 'socket.io';
 import { __dirname, currentStore, PAGE, storeContext } from './config.js';
@@ -48,6 +49,13 @@ app.get('/:role.webmanifest', (req, res, next) => {
   });
 });
 app.use(express.static(path.join(__dirname, 'dist')));
+
+// Screens are read from disk on every visit, but the server's own code only changes when it restarts.
+// After an update the screens can be new while the server is still old (no new tables, no new rules),
+// so the screens ask, and tell staff to restart the café server.
+const screensBuiltAt = () => { try { return fs.statSync(path.join(__dirname, 'dist', 'index.html')).mtimeMs; } catch { return 0; } };
+const startedWithScreens = screensBuiltAt();
+app.get('/api/version', (req, res) => res.json({ restartNeeded: screensBuiltAt() !== startedWithScreens }));
 app.get(['/login', '/login.html'], (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
 app.get('/vendor/webauthn.js', (req, res) =>
   res.sendFile(path.join(__dirname, 'node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js')));

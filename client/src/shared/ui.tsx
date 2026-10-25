@@ -1,8 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { logout } from './api';
-import { STORE_NAME } from './store';
+import { STORE_NAME, storeUrl } from './store';
 import type { User } from './types';
 
+// Shown when the tablet has been updated but its café server is still the old one.
+export function RestartNeeded() {
+  const [needed, setNeeded] = useState(false);
+  useEffect(() => {
+    const check = () => fetch(storeUrl('/api/version'), { cache: 'no-store' }).then(r => r.json()).then(d => setNeeded(!!d.restartNeeded)).catch(() => {});
+    void check(); const id = window.setInterval(check, 300000); return () => clearInterval(id);
+  }, []);
+  return needed ? <div className="restart-banner" role="alert"><span><strong>Finish the update:</strong> restart the café server. In Termux press Ctrl + C twice, then type <code>cafe</code>.</span><button type="button" aria-label="Hide until the next check" onClick={() => setNeeded(false)}>×</button></div> : null;
+}
 export function Toast({ text }: { text: string }) { return text ? <div className="toast" role="status">{text}</div> : null; }
 export function Logo({ large = false, mark = false }: { large?: boolean; mark?: boolean }) { return <span className={`logo${large ? ' large' : ''}${mark ? ' mark' : ''}`} aria-label={STORE_NAME} role="img" />; }
 export function Connection({ state, kitchen = false }: { state: string; kitchen?: boolean }) { return <><span className={`badge ${state === 'Live' ? 'live' : state === 'Offline' ? 'offline' : ''}`}>{kitchen || state !== 'Live' ? state === 'Offline' ? 'Offline · reconnecting…' : state : ''}</span>{kitchen && state === 'Offline' && <div className="offline-banner">Connection lost — new orders will not appear until it’s back</div>}</>; }

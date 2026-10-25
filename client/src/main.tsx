@@ -8,6 +8,7 @@ import { Kitchen } from './kitchen/Kitchen';
 import { Launcher } from './launcher/Launcher';
 import { Login } from './login/Login';
 import { Pos } from './pos/Pos';
+import { RestartNeeded } from './shared/ui';
 import { roleName } from './shared/format';
 import { screenPath, STORE, STORE_NAME, storeUrl } from './shared/store';
 import type { Role } from './shared/types';
@@ -41,4 +42,4 @@ function App(){
   if(path==='/admin')return <Admin/>;
   return <Launcher/>;
 }
-createRoot(document.getElementById('root')!).render(<React.StrictMode><AppErrorBoundary><App/>{STORE==='ambiente'&&<BusinessUndo/>}</AppErrorBoundary></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><AppErrorBoundary><App/><RestartNeeded/>{STORE==='ambiente'&&<BusinessUndo/>}</AppErrorBoundary></React.StrictMode>);
