@@ -148,55 +148,69 @@ async function sendUsb(bytes: Uint8Array) {
 
 // --- Bluetooth Low Energy (Web Bluetooth) ---
 // Services that BLE receipt printers commonly use for print data.
-const BLE_SERVICES = ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ffe0-0000-1000-8000-00805f9b34fb'];
-// The printer chosen with Connect. Its characteristic is looked up again whenever the link has dropped
-// (printer asleep, switched off, out of range), because the old one is dead after a reconnect.
-let bleTarget: { device: any; service: string; characteristic: string; name: string } | null = null;
+const BLE_SERVICES = ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ffe0-0000-1000-8000-00805f9b34fb', '0000ae30-0000-1000-8000-00805f9b34fb',
+  '0000fff0-0000-1000-8000-00805f9b34fb', '0000fee7-0000-1000-8000-00805f9b34fb', '0000ffe5-0000-1000-8000-00805f9b34fb'];
+// A printer can have several writable "channels" (characteristics) and only one takes print data. These
+// are the usual print channels, tried first; the rest follow in the order the printer lists them.
+const PRINT_CHANNELS = ['00002af1', '0000ff02', '49535343-8841', 'bef8d6c9', '0000ae01', '0000fff2', '0000ffe1', '0000ffe9'];
+const rank = (uuid: string) => { const i = PRINT_CHANNELS.findIndex((p) => uuid.startsWith(p)); return i < 0 ? PRINT_CHANNELS.length : i; };
+export type BleChannel = { service: string; characteristic: string; write: boolean; noResponse: boolean };
+// The printer chosen with Connect: its channels and the one in use. The channel is looked up again whenever
+// the link has dropped (printer asleep, switched off, out of range), because the old one is dead after that.
+let bleTarget: { device: any; name: string; channels: BleChannel[]; at: number } | null = null;
 let bleChar: any = null;
 async function bleCharacteristic() {
-  const { device, service, characteristic } = bleTarget!;
-  if (!bleChar || !device.gatt.connected) {
+  const { device, channels, at } = bleTarget!, channel = channels[at];
+  if (!bleChar || !device.gatt.connected || bleChar.uuid !== channel.characteristic) {
     const server = await device.gatt.connect();
-    bleChar = await (await server.getPrimaryService(service)).getCharacteristic(characteristic);
+    bleChar = await (await server.getPrimaryService(channel.service)).getCharacteristic(channel.characteristic);
   }
   return bleChar;
 }
 // How print data goes to the printer. Many 58 mm printers take 100 bytes per write; some only 20 (the
-// smallest Bluetooth packet). "auto" starts at the size that last worked on this tablet (100 at first)
-// and drops to 20 if the printer refuses the first piece. Both can be set by hand in Printer settings.
-export type BleSettings = { size: 'auto' | number; write: 'auto' | 'response' | 'no-response' };
-const BLE_SETTINGS_KEY = '5way.bleSettings', BLE_WORKED_KEY = '5way.bleSizeThatWorked';
+// smallest Bluetooth packet). Automatic starts with what last worked on this tablet (100 on the usual
+// channel at first); if the printer refuses before anything printed, it tries 20 bytes, then the next
+// channel. Size, write type and channel can also be set by hand in Printer settings.
+export type BleSettings = { size: 'auto' | number; write: 'auto' | 'response' | 'no-response'; channel: 'auto' | string };
+const BLE_SETTINGS_KEY = '5way.bleSettings', BLE_WORKED_KEY = '5way.bleSizeThatWorked', BLE_CHANNEL_KEY = '5way.bleChannelThatWorked';
 const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const save = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* not remembered */ } };
-export function bleSettings(): BleSettings { try { return { size: 'auto', write: 'auto', ...JSON.parse(read(BLE_SETTINGS_KEY) ?? '{}') }; } catch { return { size: 'auto', write: 'auto' }; } }
+const DEFAULTS: BleSettings = { size: 'auto', write: 'auto', channel: 'auto' };
+export function bleSettings(): BleSettings { try { return { ...DEFAULTS, ...JSON.parse(read(BLE_SETTINGS_KEY) ?? '{}') }; } catch { return { ...DEFAULTS }; } }
 export function saveBleSettings(next: BleSettings) { save(BLE_SETTINGS_KEY, JSON.stringify(next)); }
+export const bleChannels = () => bleTarget?.channels ?? [];
+export const shortUuid = (uuid: string) => uuid.startsWith('0000') ? uuid.slice(4, 8) : uuid.slice(0, 8);
 // What the last print did, shown under Connect so a problem can be described exactly.
-export type BleReport = { printer: string; service: string; characteristic: string; canWrite: string; size: number; write: string; bytes: number; pieces: number; ok: boolean; error?: string };
+export type BleReport = { printer: string; channel: string; channelNo: number; channels: number; canWrite: string; size: number; write: string; bytes: number; pieces: number; tries: number; ok: boolean; error?: string };
 export let lastBleReport: BleReport | null = null;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Chrome forgets the printer when the page reloads. Where it allows it (getDevices), the printer picked
 // last time is found again without a tap, by the name remembered on this tablet.
 const BLE_NAME_KEY = '5way.blePrinter';
-const rememberedName = () => { try { return localStorage.getItem(BLE_NAME_KEY); } catch { return null; } };
 async function attachBle(device: any) {
   const server = await device.gatt.connect();
   device.addEventListener?.('gattserverdisconnected', () => { bleChar = null; });
+  const channels: BleChannel[] = [];
   for (const uuid of BLE_SERVICES) {
     try {
-      const service = await server.getPrimaryService(uuid);
-      const characteristic = (await service.getCharacteristics()).find((c: any) => c.properties.write || c.properties.writeWithoutResponse);
-      if (characteristic) {
-        bleTarget = { device, service: uuid, characteristic: characteristic.uuid, name: device.name || 'Bluetooth printer' }; bleChar = characteristic;
-        try { localStorage.setItem(BLE_NAME_KEY, bleTarget.name); } catch { /* not remembered; Connect still works */ }
-        return bleTarget.name;
+      for (const c of await (await server.getPrimaryService(uuid)).getCharacteristics()) {
+        if (c.properties.write || c.properties.writeWithoutResponse) channels.push({ service: uuid, characteristic: c.uuid, write: !!c.properties.write, noResponse: !!c.properties.writeWithoutResponse });
       }
-    } catch { /* not this service */ }
+    } catch { /* the printer doesn't have this service */ }
   }
-  device.gatt.disconnect();
-  throw new Error('This printer only has classic Bluetooth, which Chrome can’t send to. Use a USB cable (Printer type: ESC/POS over USB cable).');
+  if (!channels.length) {
+    device.gatt.disconnect();
+    throw new Error('This printer only has classic Bluetooth, which Chrome can’t send to. Use a USB cable (Printer type: ESC/POS over USB cable).');
+  }
+  channels.sort((a, b) => rank(a.characteristic) - rank(b.characteristic));
+  bleTarget = { device, name: device.name || 'Bluetooth printer', channels, at: Math.max(0, channels.findIndex((c) => c.characteristic === read(BLE_CHANNEL_KEY))) };
+  bleChar = null;
+  save(BLE_NAME_KEY, bleTarget.name);
+  return bleTarget.name;
 }
 async function bleFromEarlier() {
-  const bluetooth = (navigator as any).bluetooth, name = rememberedName();
+  const bluetooth = (navigator as any).bluetooth, name = read(BLE_NAME_KEY);
   if (!bluetooth?.getDevices || !name) return false;
   for (const device of await bluetooth.getDevices().catch(() => [])) {
     if (device.name !== name) continue;
@@ -206,39 +220,46 @@ async function bleFromEarlier() {
 }
 async function sendBle(bytes: Uint8Array) {
   if (!bleTarget && !(await bleFromEarlier())) throw new Error('The Bluetooth printer isn’t connected. Chrome forgets it when the page reloads.');
-  const settings = bleSettings(), automatic = settings.size === 'auto';
-  let size = automatic ? Number(read(BLE_WORKED_KEY)) || 100 : Number(settings.size);
-  for (let attempt = 1; ; attempt++) {
-    let sent = 0, pieces = 0, mode = '';
-    try {
-      const c = await bleCharacteristic();
-      const noResponse = settings.write === 'no-response' || (settings.write === 'auto' && c.properties.writeWithoutResponse);
-      mode = noResponse ? 'without response' : 'with response';
-      for (; sent < bytes.length; sent += size, pieces++) {
-        const chunk = bytes.slice(sent, sent + size);
-        if (noResponse) await c.writeValueWithoutResponse(chunk);
-        else await (c.writeValueWithResponse ? c.writeValueWithResponse(chunk) : c.writeValue(chunk));
-        // A short breather every ~160 bytes so a small printer buffer keeps up.
-        if (noResponse && ((pieces + 1) * size) % 160 < size) await pause(20);
+  const target = bleTarget!, settings = bleSettings();
+  const chosen = settings.channel === 'auto' ? -1 : target.channels.findIndex((c) => c.characteristic === settings.channel);
+  if (chosen >= 0) target.at = chosen;
+  const channels = chosen >= 0 ? [target.at] : [target.at, ...target.channels.map((_, i) => i).filter((i) => i !== target.at)];
+  const sizes = settings.size === 'auto' ? [...new Set([Number(read(BLE_WORKED_KEY)) || 100, 20])] : [Number(settings.size)];
+  let tries = 0, lastError: Error | null = null;
+  for (const at of channels) {
+    for (const size of sizes) {
+      target.at = at; tries++;
+      let sent = 0, pieces = 0, mode = '';
+      try {
+        const c = await bleCharacteristic();
+        const noResponse = settings.write === 'no-response' || (settings.write === 'auto' && c.properties.writeWithoutResponse);
+        mode = noResponse ? 'without response' : 'with response';
+        for (; sent < bytes.length; sent += size, pieces++) {
+          const chunk = bytes.slice(sent, sent + size);
+          if (noResponse) await c.writeValueWithoutResponse(chunk);
+          else await (c.writeValueWithResponse ? c.writeValueWithResponse(chunk) : c.writeValue(chunk));
+          // A short breather every ~160 bytes so a small printer buffer keeps up.
+          if (noResponse && ((pieces + 1) * size) % 160 < size) await pause(20);
+        }
+        if (settings.size === 'auto') save(BLE_WORKED_KEY, String(size));
+        if (settings.channel === 'auto') save(BLE_CHANNEL_KEY, target.channels[at].characteristic);
+        lastBleReport = report(size, mode, bytes.length, pieces, tries, true);
+        return;
+      } catch (e) {
+        bleChar = null; lastError = e as Error;
+        lastBleReport = report(size, mode, bytes.length, pieces, tries, false, lastError.message);
+        // After part of the receipt printed, trying again would print that part twice, so stop here.
+        if (sent > 0) throw new Error(`Bluetooth printer stopped (${lastError.message}). Switch the printer off and on, then tap Connect in Printer settings.`);
       }
-      if (automatic) save(BLE_WORKED_KEY, String(size));
-      lastBleReport = report(c, size, mode, bytes.length, pieces, true);
-      return;
-    } catch (e) {
-      bleChar = null;
-      lastBleReport = bleTarget && report(null, size, mode, bytes.length, pieces, false, (e as Error).message);
-      // Nothing printed yet: one more go on a fresh connection, in 20-byte pieces when choosing
-      // automatically. After part of the receipt printed, retrying would print that part twice.
-      if (sent === 0 && attempt === 1) { if (automatic) size = 20; continue; }
-      throw new Error(`Bluetooth printer stopped (${(e as Error).message}). Switch the printer off and on, then tap Connect in Printer settings.`);
     }
   }
+  throw new Error(`The printer refused the print data on ${channels.length === 1 ? 'the chosen Bluetooth channel' : `all ${channels.length} of its Bluetooth channels`} (${lastError?.message}). Turn the tablet’s Bluetooth and the printer off and on, then tap Connect.`);
 }
-function report(c: any, size: number, write: string, bytes: number, pieces: number, ok: boolean, error?: string): BleReport {
-  const short = (uuid: string) => uuid.length > 8 ? uuid.slice(4, 8) : uuid, props = c?.properties ?? bleChar?.properties ?? {};
-  return { printer: bleTarget!.name, service: short(bleTarget!.service), characteristic: short(bleTarget!.characteristic),
-    canWrite: [props.write && 'with response', props.writeWithoutResponse && 'without response'].filter(Boolean).join(' & ') || 'unknown',
-    size, write, bytes, pieces, ok, error };
+function report(size: number, write: string, bytes: number, pieces: number, tries: number, ok: boolean, error?: string): BleReport {
+  const t = bleTarget!, channel = t.channels[t.at];
+  return { printer: t.name, channel: `${shortUuid(channel.service)}/${shortUuid(channel.characteristic)}`, channelNo: t.at + 1, channels: t.channels.length,
+    canWrite: [channel.write && 'with response', channel.noResponse && 'without response'].filter(Boolean).join(' & ') || 'unknown',
+    size, write, bytes, pieces, tries, ok, error };
 }
 
 // Asks the browser for the printer. Must run from a tap (browsers require it).

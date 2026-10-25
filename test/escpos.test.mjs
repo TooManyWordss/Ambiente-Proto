@@ -51,40 +51,50 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   assert.ok(text(both).indexOf('Cash') < text(both).indexOf('KITCHEN'), 'receipt first, then the kitchen slip');
 });
 
-test('Bluetooth printing finds a piece size the printer takes, reconnects, and never prints a piece twice', async () => {
+test('Bluetooth printing finds the printer’s print channel and piece size, reconnects, and never prints twice', async () => {
   const { connectPrinter, sendToPrinter, saveBleSettings } = await import('../client/src/printing/escpos.ts');
   if (!globalThis.localStorage?.setItem) { const store = new Map(); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } }); }
-  // A pretend BLE printer: each connection gives a new characteristic, like a real one.
+  // A pretend BLE printer with two writable channels: ff02 looks like a print channel but refuses data
+  // ("GATT operation failed"), ae01 is the one that prints. Each connection hands out new objects.
+  const PRINT = '0000ae01-0000-1000-8000-00805f9b34fb', DUD = '0000ff02-0000-1000-8000-00805f9b34fb';
   const written = [], plan = { failNext: false, failAfter: Infinity, largest: 100, modes: [] };
   let connections = 0;
   const device = { name: 'Fake 58H', listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; },
     gatt: { connected: false, async connect() { connections++; this.connected = true; return server; }, disconnect() { this.connected = false; } } };
-  const write = (mode) => async (chunk) => {
+  const fail = () => { throw new Error('GATT operation failed for unknown reason.'); };
+  const write = (uuid, mode) => async (chunk) => {
     plan.modes.push(mode);
-    if (plan.failNext) { plan.failNext = false; throw new Error('GATT operation failed for unknown reason.'); }
-    if (chunk.length > plan.largest || written.length >= plan.failAfter) throw new Error('GATT operation failed for unknown reason.');
+    if (uuid === DUD) fail();
+    if (plan.failNext) { plan.failNext = false; fail(); }
+    if (chunk.length > plan.largest || written.length >= plan.failAfter) fail();
     written.push([...chunk]);
   };
-  const characteristic = () => ({ uuid: '0000ff02-0000-1000-8000-00805f9b34fb', properties: { write: true, writeWithoutResponse: true },
-    writeValueWithoutResponse: write('without'), writeValueWithResponse: write('with') });
-  const server = { async getPrimaryService(uuid) { if (uuid !== '000018f0-0000-1000-8000-00805f9b34fb') throw new Error('no'); return { getCharacteristics: async () => [characteristic()], getCharacteristic: async () => characteristic() }; } };
+  const channel = (uuid) => ({ uuid, properties: { write: true, writeWithoutResponse: true }, writeValueWithoutResponse: write(uuid, 'without'), writeValueWithResponse: write(uuid, 'with') });
+  const services = { '0000ff00-0000-1000-8000-00805f9b34fb': DUD, '0000ae30-0000-1000-8000-00805f9b34fb': PRINT };
+  const server = { async getPrimaryService(uuid) { if (!services[uuid]) throw new Error('no'); return { getCharacteristics: async () => [channel(services[uuid])], getCharacteristic: async () => channel(services[uuid]) }; } };
   Object.defineProperty(globalThis.navigator, 'bluetooth', { value: { requestDevice: async () => device, getDevices: async () => [device] }, configurable: true });
 
   assert.equal(await connectPrinter('ble'), 'Fake 58H');
   const receipt = encodeReceipt({ label: '1003', items: [{ name: 'Sweet Corn', qty: 2, unit_price_cents: 9000 }, { name: 'Iced Spanish Latte', qty: 1, unit_price_cents: 18500 }], total_cents: 36500 }, settings, { columns: 32, cut: false, drawer: false });
-  // A printer that takes 100-byte pieces gets them, as before.
+  // The usual print channel (ff02) refuses, so it moves on to the next channel, which prints.
   await sendToPrinter('ble', receipt);
+  assert.deepEqual(written.flat(), [...receipt], 'printed exactly once, in order');
   assert.equal(written[0].length, 100);
-  assert.deepEqual(written.flat(), [...receipt], 'the printer got the receipt exactly once, in order');
+  const first = (await import('../client/src/printing/escpos.ts')).lastBleReport;
+  assert.equal(first.channel, 'ae30/ae01'); assert.ok(first.tries > 1 && first.ok);
+  // The channel that worked is remembered: the next receipt goes straight to it.
+  written.length = 0; plan.modes.length = 0;
+  await sendToPrinter('ble', receipt);
+  assert.equal((await import('../client/src/printing/escpos.ts')).lastBleReport.tries, 1);
 
   // The printer slept: the next print reconnects and uses the new connection.
   written.length = 0; device.gatt.connected = false; device.listeners.gattserverdisconnected?.();
+  const before = connections;
   await sendToPrinter('ble', receipt);
   assert.deepEqual(written.flat(), [...receipt]);
-  assert.equal(connections, 2);
+  assert.ok(connections > before);
 
-  // A printer that refuses 100-byte pieces: the first piece fails, so it goes again in 20-byte pieces,
-  // and remembers that for the next receipt.
+  // A printer that refuses 100-byte pieces: it goes again in 20-byte pieces and remembers that.
   written.length = 0; plan.largest = 20;
   await sendToPrinter('ble', receipt);
   assert.ok(written.every(c => c.length <= 20));
@@ -97,20 +107,24 @@ test('Bluetooth printing finds a piece size the printer takes, reconnects, and n
   await assert.rejects(sendToPrinter('ble', receipt), /Switch the printer off and on/);
   assert.equal(written.length, 3);
 
-  // Chosen by hand in Printer settings: piece size and write type.
+  // Chosen by hand in Printer settings: piece size, write type and channel.
   plan.failAfter = Infinity; plan.largest = 512; written.length = 0; plan.modes.length = 0;
-  saveBleSettings({ size: 180, write: 'response' });
+  saveBleSettings({ size: 180, write: 'response', channel: PRINT });
   await sendToPrinter('ble', receipt);
   assert.equal(written[0].length, 180);
   assert.ok(plan.modes.every(m => m === 'with'));
-  saveBleSettings({ size: 'auto', write: 'auto' });
+  // Choosing the channel that refuses data says so instead of hopping to another.
+  saveBleSettings({ size: 'auto', write: 'auto', channel: DUD });
+  await assert.rejects(sendToPrinter('ble', receipt), /the chosen Bluetooth channel/);
+  saveBleSettings({ size: 'auto', write: 'auto', channel: 'auto' });
 
   // After the page reloads (a fresh copy of the code knows no printer), the printer chosen before is
-  // found again without a tap, by its remembered name.
+  // found again without a tap, by its remembered name, and goes straight to the channel that worked.
   written.length = 0; device.gatt.connected = false;
   const reloaded = await import('../client/src/printing/escpos.ts?reloaded');
   await reloaded.sendToPrinter('ble', receipt);
   assert.deepEqual(written.flat(), [...receipt]);
+  assert.equal(reloaded.lastBleReport.tries, 1);
   // A printer that was never chosen on this tablet still needs Connect.
   localStorage.removeItem('5way.blePrinter');
   const fresh = await import('../client/src/printing/escpos.ts?fresh');
