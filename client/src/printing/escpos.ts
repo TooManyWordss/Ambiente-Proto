@@ -161,9 +161,18 @@ async function bleCharacteristic() {
   }
   return bleChar;
 }
-// Cheap 58 mm printers take 20 bytes per write (the smallest Bluetooth packet) and have a small buffer,
-// so the receipt goes in 20-byte pieces with a short pause every few pieces.
-export const BLE_CHUNK = 20;
+// How print data goes to the printer. Many 58 mm printers take 100 bytes per write; some only 20 (the
+// smallest Bluetooth packet). "auto" starts at the size that last worked on this tablet (100 at first)
+// and drops to 20 if the printer refuses the first piece. Both can be set by hand in Printer settings.
+export type BleSettings = { size: 'auto' | number; write: 'auto' | 'response' | 'no-response' };
+const BLE_SETTINGS_KEY = '5way.bleSettings', BLE_WORKED_KEY = '5way.bleSizeThatWorked';
+const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
+const save = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* not remembered */ } };
+export function bleSettings(): BleSettings { try { return { size: 'auto', write: 'auto', ...JSON.parse(read(BLE_SETTINGS_KEY) ?? '{}') }; } catch { return { size: 'auto', write: 'auto' }; } }
+export function saveBleSettings(next: BleSettings) { save(BLE_SETTINGS_KEY, JSON.stringify(next)); }
+// What the last print did, shown under Connect so a problem can be described exactly.
+export type BleReport = { printer: string; service: string; characteristic: string; canWrite: string; size: number; write: string; bytes: number; pieces: number; ok: boolean; error?: string };
+export let lastBleReport: BleReport | null = null;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Chrome forgets the printer when the page reloads. Where it allows it (getDevices), the printer picked
 // last time is found again without a tap, by the name remembered on this tablet.
@@ -184,7 +193,7 @@ async function attachBle(device: any) {
     } catch { /* not this service */ }
   }
   device.gatt.disconnect();
-  throw new Error('This printer does not accept print data over Bluetooth Low Energy. Use the RawBT app instead.');
+  throw new Error('This printer only has classic Bluetooth, which Chrome can’t send to. Use a USB cable (Printer type: ESC/POS over USB cable).');
 }
 async function bleFromEarlier() {
   const bluetooth = (navigator as any).bluetooth, name = rememberedName();
@@ -197,25 +206,39 @@ async function bleFromEarlier() {
 }
 async function sendBle(bytes: Uint8Array) {
   if (!bleTarget && !(await bleFromEarlier())) throw new Error('The Bluetooth printer isn’t connected. Chrome forgets it when the page reloads.');
+  const settings = bleSettings(), automatic = settings.size === 'auto';
+  let size = automatic ? Number(read(BLE_WORKED_KEY)) || 100 : Number(settings.size);
   for (let attempt = 1; ; attempt++) {
-    let sent = 0;
+    let sent = 0, pieces = 0, mode = '';
     try {
       const c = await bleCharacteristic();
-      for (; sent < bytes.length; sent += BLE_CHUNK) {
-        const chunk = bytes.slice(sent, sent + BLE_CHUNK);
-        if (c.properties.writeWithoutResponse) await c.writeValueWithoutResponse(chunk);
+      const noResponse = settings.write === 'no-response' || (settings.write === 'auto' && c.properties.writeWithoutResponse);
+      mode = noResponse ? 'without response' : 'with response';
+      for (; sent < bytes.length; sent += size, pieces++) {
+        const chunk = bytes.slice(sent, sent + size);
+        if (noResponse) await c.writeValueWithoutResponse(chunk);
         else await (c.writeValueWithResponse ? c.writeValueWithResponse(chunk) : c.writeValue(chunk));
-        if ((sent / BLE_CHUNK) % 8 === 7) await pause(20);
+        // A short breather every ~160 bytes so a small printer buffer keeps up.
+        if (noResponse && ((pieces + 1) * size) % 160 < size) await pause(20);
       }
+      if (automatic) save(BLE_WORKED_KEY, String(size));
+      lastBleReport = report(c, size, mode, bytes.length, pieces, true);
       return;
     } catch (e) {
       bleChar = null;
-      // A fresh connection usually fixes a failure on the first piece. Retrying after part of the
-      // receipt printed would print that part twice, so then it stops and says so.
-      if (sent === 0 && attempt === 1) continue;
+      lastBleReport = bleTarget && report(null, size, mode, bytes.length, pieces, false, (e as Error).message);
+      // Nothing printed yet: one more go on a fresh connection, in 20-byte pieces when choosing
+      // automatically. After part of the receipt printed, retrying would print that part twice.
+      if (sent === 0 && attempt === 1) { if (automatic) size = 20; continue; }
       throw new Error(`Bluetooth printer stopped (${(e as Error).message}). Switch the printer off and on, then tap Connect in Printer settings.`);
     }
   }
+}
+function report(c: any, size: number, write: string, bytes: number, pieces: number, ok: boolean, error?: string): BleReport {
+  const short = (uuid: string) => uuid.length > 8 ? uuid.slice(4, 8) : uuid, props = c?.properties ?? bleChar?.properties ?? {};
+  return { printer: bleTarget!.name, service: short(bleTarget!.service), characteristic: short(bleTarget!.characteristic),
+    canWrite: [props.write && 'with response', props.writeWithoutResponse && 'without response'].filter(Boolean).join(' & ') || 'unknown',
+    size, write, bytes, pieces, ok, error };
 }
 
 // Asks the browser for the printer. Must run from a tap (browsers require it).

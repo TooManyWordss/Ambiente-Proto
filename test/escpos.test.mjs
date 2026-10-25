@@ -51,27 +51,30 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   assert.ok(text(both).indexOf('Cash') < text(both).indexOf('KITCHEN'), 'receipt first, then the kitchen slip');
 });
 
-test('Bluetooth printing sends 20-byte pieces, reconnects after a drop and never prints a piece twice', async () => {
-  const { connectPrinter, sendToPrinter } = await import('../client/src/printing/escpos.ts');
+test('Bluetooth printing finds a piece size the printer takes, reconnects, and never prints a piece twice', async () => {
+  const { connectPrinter, sendToPrinter, saveBleSettings } = await import('../client/src/printing/escpos.ts');
+  if (!globalThis.localStorage?.setItem) { const store = new Map(); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } }); }
   // A pretend BLE printer: each connection gives a new characteristic, like a real one.
-  const written = [], plan = { failNext: false, failAfter: Infinity };
+  const written = [], plan = { failNext: false, failAfter: Infinity, largest: 100, modes: [] };
   let connections = 0;
   const device = { name: 'Fake 58H', listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; },
     gatt: { connected: false, async connect() { connections++; this.connected = true; return server; }, disconnect() { this.connected = false; } } };
-  const characteristic = () => ({ uuid: 'ff02', properties: { writeWithoutResponse: true },
-    async writeValueWithoutResponse(chunk) {
-      if (plan.failNext) { plan.failNext = false; throw new Error('GATT operation failed for unknown reason.'); }
-      if (written.length >= plan.failAfter) throw new Error('GATT operation failed for unknown reason.');
-      written.push([...chunk]);
-    } });
-  if (!globalThis.localStorage?.setItem) { const store = new Map(); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } }); }
+  const write = (mode) => async (chunk) => {
+    plan.modes.push(mode);
+    if (plan.failNext) { plan.failNext = false; throw new Error('GATT operation failed for unknown reason.'); }
+    if (chunk.length > plan.largest || written.length >= plan.failAfter) throw new Error('GATT operation failed for unknown reason.');
+    written.push([...chunk]);
+  };
+  const characteristic = () => ({ uuid: '0000ff02-0000-1000-8000-00805f9b34fb', properties: { write: true, writeWithoutResponse: true },
+    writeValueWithoutResponse: write('without'), writeValueWithResponse: write('with') });
   const server = { async getPrimaryService(uuid) { if (uuid !== '000018f0-0000-1000-8000-00805f9b34fb') throw new Error('no'); return { getCharacteristics: async () => [characteristic()], getCharacteristic: async () => characteristic() }; } };
   Object.defineProperty(globalThis.navigator, 'bluetooth', { value: { requestDevice: async () => device, getDevices: async () => [device] }, configurable: true });
 
   assert.equal(await connectPrinter('ble'), 'Fake 58H');
-  const receipt = encodeReceipt({ label: '1003', items: [{ name: 'Sweet Corn', qty: 2, unit_price_cents: 9000 }], total_cents: 18000 }, settings, { columns: 32, cut: false, drawer: false });
+  const receipt = encodeReceipt({ label: '1003', items: [{ name: 'Sweet Corn', qty: 2, unit_price_cents: 9000 }, { name: 'Iced Spanish Latte', qty: 1, unit_price_cents: 18500 }], total_cents: 36500 }, settings, { columns: 32, cut: false, drawer: false });
+  // A printer that takes 100-byte pieces gets them, as before.
   await sendToPrinter('ble', receipt);
-  assert.ok(written.every(c => c.length <= 20), 'every piece fits a 20-byte packet');
+  assert.equal(written[0].length, 100);
   assert.deepEqual(written.flat(), [...receipt], 'the printer got the receipt exactly once, in order');
 
   // The printer slept: the next print reconnects and uses the new connection.
@@ -80,19 +83,31 @@ test('Bluetooth printing sends 20-byte pieces, reconnects after a drop and never
   assert.deepEqual(written.flat(), [...receipt]);
   assert.equal(connections, 2);
 
-  // The very first piece fails: one fresh connection, then the whole receipt.
-  written.length = 0; plan.failNext = true;
+  // A printer that refuses 100-byte pieces: the first piece fails, so it goes again in 20-byte pieces,
+  // and remembers that for the next receipt.
+  written.length = 0; plan.largest = 20;
   await sendToPrinter('ble', receipt);
+  assert.ok(written.every(c => c.length <= 20));
   assert.deepEqual(written.flat(), [...receipt]);
+  written.length = 0; await sendToPrinter('ble', receipt);
+  assert.equal(written[0].length, 20, 'the size that worked is remembered');
 
   // Failing halfway stops with a clear message rather than printing the first half again.
   written.length = 0; plan.failAfter = 3;
   await assert.rejects(sendToPrinter('ble', receipt), /Switch the printer off and on/);
   assert.equal(written.length, 3);
 
+  // Chosen by hand in Printer settings: piece size and write type.
+  plan.failAfter = Infinity; plan.largest = 512; written.length = 0; plan.modes.length = 0;
+  saveBleSettings({ size: 180, write: 'response' });
+  await sendToPrinter('ble', receipt);
+  assert.equal(written[0].length, 180);
+  assert.ok(plan.modes.every(m => m === 'with'));
+  saveBleSettings({ size: 'auto', write: 'auto' });
+
   // After the page reloads (a fresh copy of the code knows no printer), the printer chosen before is
   // found again without a tap, by its remembered name.
-  plan.failAfter = Infinity; written.length = 0; device.gatt.connected = false;
+  written.length = 0; device.gatt.connected = false;
   const reloaded = await import('../client/src/printing/escpos.ts?reloaded');
   await reloaded.sendToPrinter('ble', receipt);
   assert.deepEqual(written.flat(), [...receipt]);
