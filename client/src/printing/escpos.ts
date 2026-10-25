@@ -8,12 +8,14 @@ export type PrintMethod = 'system' | 'rawbt' | 'usb' | 'ble';
 export type ReceiptLine = { name?: string; qty: number; unit_price_cents?: number };
 export type ReceiptData = {
   label: string; station?: string; created_at?: string; items?: ReceiptLine[];
-  subtotal_cents?: number; tax_cents?: number; total_cents?: number;
+  subtotal_cents?: number; discount_cents?: number; discount_label?: string | null; tax_cents?: number; total_cents?: number;
   cash_tendered_cents?: number | null; change_cents?: number | null;
   table_name?: string | null; guests?: number | null; staff_name?: string | null;
   offline?: boolean; reprint?: boolean; test?: boolean;
 };
-export type ReceiptSettings = { name: string; title?: string; header?: string[]; footer?: string[] };
+// A black-and-white picture for the printer: width in dots (a multiple of 8), one bit per dot, rows top to bottom.
+export type Bitmap = { width: number; height: number; data: Uint8Array };
+export type ReceiptSettings = { name: string; title?: string; header?: string[]; footer?: string[]; logo?: Bitmap | null };
 export type PrintOptions = { columns: number; cut: boolean; drawer: boolean };
 
 const ESC = 0x1b, GS = 0x1d, LF = 0x0a;
@@ -36,7 +38,18 @@ class Receipt {
   size(wide: boolean, tall: boolean) { return this.raw(GS, 0x21, (wide ? 0x10 : 0) | (tall ? 0x01 : 0)); }
   text(value: string) { for (const ch of ascii(value)) this.bytes.push(ch.charCodeAt(0)); return this; }
   line(value = '') { return this.text(value).raw(LF); }
-  rule() { return this.line('-'.repeat(this.columns)); }
+  rule(char = '-') { return this.line(char.repeat(this.columns)); }
+  // Extra paper between lines, in dots (about 8 dots to a millimetre).
+  gap(dots: number) { return this.raw(ESC, 0x4a, dots); }
+  // White text on a black band.
+  reverse(on: boolean) { return this.raw(GS, 0x42, on ? 1 : 0); }
+  // A picture, sent as raster rows (GS v 0).
+  raster(image: Bitmap) {
+    const bytesPerRow = image.width / 8;
+    this.raw(GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, bytesPerRow >> 8, image.height & 0xff, image.height >> 8);
+    for (const b of image.data) this.bytes.push(b);
+    return this;
+  }
   // "2 x Iced Latte ........ P300.00", wrapping long names onto the next line.
   row(left: string, right: string, width = this.columns) {
     const room = Math.max(1, width - right.length - 1);
@@ -54,50 +67,69 @@ class Receipt {
   done() { return new Uint8Array(this.bytes); }
 }
 
+// The customer's receipt: the café's logo, the receipt number and time, the table, then the items with
+// some air between them, the totals and a framed thank-you.
 export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options: PrintOptions) {
-  const p = new Receipt(options.columns);
-  p.align('center').bold(true).size(false, true).line(settings.name).size(false, false).bold(false);
+  const p = new Receipt(options.columns), half = Math.floor(options.columns / 2);
+  p.align('center');
+  if (settings.logo) p.raster(settings.logo).line();
+  else p.bold(true).size(true, true).line(settings.name).size(false, false).bold(false);
   if (r.station === 'barista' && settings.title) p.line(settings.title);
   for (const h of settings.header ?? []) p.line(h);
-  p.rule();
-  if (r.test) p.line('Test receipt').line('ESC/POS printer is working');
-  if (r.offline) p.line('Saved offline').line('Number given when sent');
-  if (r.reprint) p.bold(true).line('REPRINT').bold(false);
-  if (r.station === 'barista' && r.label) p.bold(true).size(true, true).line(`Order ${r.label}`).size(false, false).bold(false);
-  else if (!r.test && r.label) p.bold(true).line(`Receipt #${r.label}`).bold(false);
-  p.line(clock(r.created_at));
+  p.align('left').rule('=');
+  if (r.test) p.align('center').line('Test receipt').line('The printer is working').align('left');
+  if (r.offline) p.line('Saved offline - number given when sent');
+  if (r.reprint) p.bold(true).line('*** REPRINT ***').bold(false);
+  if (r.station === 'barista' && r.label) p.align('center').bold(true).size(true, true).line(`Order ${r.label}`).size(false, false).bold(false).align('left').line(clock(r.created_at));
+  else if (!r.test && r.label) p.bold(true).row(`Receipt #${r.label}`, clock(r.created_at)).bold(false);
+  else p.line(clock(r.created_at));
   if (r.table_name) p.line(`${r.table_name}${r.guests ? ` - ${r.guests} guest${r.guests === 1 ? '' : 's'}` : ''}`);
   if (r.staff_name) p.line(`Served by ${r.staff_name}`);
-  p.align('left').rule();
-  for (const i of r.items ?? []) p.row(`${i.qty} x ${i.name ?? ''}`, peso((i.unit_price_cents ?? 0) * i.qty));
   p.rule();
-  if (r.tax_cents) p.row('Subtotal', peso(r.subtotal_cents)).row('Tax', peso(r.tax_cents));
+  // A long name wraps onto lines that stay together; the space goes between items.
+  (r.items ?? []).forEach((i, n) => {
+    if (n) p.gap(18);
+    p.row(`${i.qty} x ${i.name ?? ''}`, peso((i.unit_price_cents ?? 0) * i.qty));
+    if (i.qty > 1) p.line(`    ${peso(i.unit_price_cents)} each`);
+  });
+  p.rule();
+  if (r.tax_cents || r.discount_cents) p.row('Subtotal', peso(r.subtotal_cents));
+  if (r.discount_cents) p.row(`Discount${r.discount_label ? ` (${r.discount_label})` : ''}`, `-${peso(r.discount_cents)}`);
+  if (r.tax_cents) p.row('Tax', peso(r.tax_cents));
   // Double-width text fits half as many characters.
-  p.bold(true).size(true, false).row('TOTAL', peso(r.total_cents), Math.floor(options.columns / 2)).size(false, false).bold(false);
+  p.bold(true).size(true, false).row('TOTAL', peso(r.total_cents), half).size(false, false).bold(false);
   if (r.cash_tendered_cents != null) p.row('Cash', peso(r.cash_tendered_cents)).row('Change', peso(r.change_cents ?? 0));
-  p.rule().align('center');
-  for (const f of settings.footer ?? []) p.line(f);
+  p.rule('=').align('center');
+  for (const f of settings.footer ?? []) p.line(f.length + 4 <= options.columns ? `* ${f} *` : f);
   p.raw(LF, LF, LF, LF);
   if (options.cut) p.raw(GS, 0x56, 0x42, 0x00); // feed and cut; printers without a cutter ignore it
   if (options.drawer) p.raw(ESC, 0x70, 0x00, 0x19, 0xfa); // kick the cash drawer plugged into the printer
   return p.done();
 }
 
-// The kitchen's copy when no kitchen screen is connected: what to cook, large, with no prices.
-// It prints after the customer's receipt on the same printer, ready to tear off.
+// The kitchen's copy when no kitchen screen is connected: a black KITCHEN ORDER band so it can't be
+// mistaken for a receipt, then what to cook, large and well spaced, with no prices.
 export function encodeKitchenSlip(r: ReceiptData, options: PrintOptions) {
   const p = new Receipt(options.columns);
-  p.align('center').bold(true).size(true, true).line('KITCHEN').size(false, true).line(r.table_name ?? 'Takeout').size(false, false).bold(false);
-  if (r.guests) p.line(`${r.guests} guest${r.guests === 1 ? '' : 's'}`);
-  p.line([r.label ? `Receipt #${r.label}` : '', clock(r.created_at)].filter(Boolean).join(' - '));
+  // Double width fits half the characters: the band is " KITCHEN ORDER " on 58 mm paper and up.
+  p.align('center').bold(true).reverse(true).size(true, true).line(' KITCHEN ORDER ').size(false, false).reverse(false);
+  p.size(false, true).line(r.table_name ?? 'Takeout').size(false, false).bold(false);
+  p.line([r.guests ? `${r.guests} guest${r.guests === 1 ? '' : 's'}` : '', r.label ? `Receipt #${r.label}` : ''].filter(Boolean).join(' - ')).line(clock(r.created_at));
   if (r.offline) p.line('Saved offline');
-  if (r.reprint) p.line('REPRINT');
-  p.align('left').rule().bold(true).size(false, true);
-  for (const i of r.items ?? []) p.row(`${i.qty} x ${i.name ?? ''}`, '');
-  p.size(false, false).bold(false).rule();
+  if (r.reprint) p.line('*** REPRINT ***');
+  p.align('left').rule('=').bold(true).size(false, true);
+  (r.items ?? []).forEach((i, n) => { if (n) p.gap(24); p.row(`${i.qty} x ${i.name ?? ''}`, ''); });
+  p.size(false, false).bold(false).rule('=');
   p.raw(LF, LF, LF, LF);
   if (options.cut) p.raw(GS, 0x56, 0x42, 0x00);
   return p.done();
+}
+
+// Between the customer's receipt and the kitchen slip on a printer without a cutter: room to tear and a
+// clear line to tear along.
+export function tearOff(options: PrintOptions) {
+  const p = new Receipt(options.columns), label = ' tear here ', side = Math.max(2, Math.floor((options.columns - label.length) / 2));
+  return p.align('center').line('-'.repeat(side) + label + '-'.repeat(side)).raw(LF, LF, LF).done();
 }
 
 // Several printouts sent to the printer as one job.

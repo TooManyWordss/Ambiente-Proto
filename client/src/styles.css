@@ -404,3 +404,14 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .ble-advanced{margin:4px 0 8px;display:grid;gap:8px}
 .ble-advanced summary{cursor:pointer;font-weight:700;color:var(--accent)}
 .ble-details{font-size:.8rem;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px 10px}
+/* Printed receipt: logo in black and white, double rules, items with air between them, and a kitchen slip
+   with a black KITCHEN ORDER band after a tear line. */
+@media print{
+  .r-logo{display:block;width:72%;margin:0 auto 6px;filter:grayscale(1) contrast(6) brightness(1.15)}
+  .print-receipt hr.r-double{border-top:3px double #000}
+  .r-item{margin:7px 0}
+  .r-each{padding-left:1.4em;font-size:9pt}
+  .r-tear{margin:14mm 0 6mm;text-align:center;font-size:9pt;letter-spacing:.1em}
+  .r-banner{background:#000;color:#fff;font-weight:800;font-size:16pt;letter-spacing:.08em;padding:4px 0;margin-bottom:4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .r-slip-line{margin:8px 0}
+}

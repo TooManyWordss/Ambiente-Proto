@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encodeKitchenSlip, encodeReceipt, joinPrints } from '../client/src/printing/escpos.ts';
+import { encodeKitchenSlip, encodeReceipt, joinPrints, tearOff } from '../client/src/printing/escpos.ts';
+import { darkBox, toBitmap } from '../client/src/printing/logo.ts';
 
 const settings = { name: 'Café Ambiente', header: ['Iligan City'], footer: ['Thank you!'] };
 const text = (bytes) => Buffer.from(bytes).toString('latin1');
@@ -19,7 +20,7 @@ test('a 58 mm ESC/POS receipt fits 32 columns, prints plain ASCII and ends with 
   assert.ok(out.includes('P370.00') && out.includes('P460.00') && out.includes('P40.00'));
   assert.ok([...bytes].every((b) => b < 0x80 || b === 0xfa), 'only ASCII text');
   // Every printed line fits the paper once the printer commands are taken out.
-  const lines = out.replace(/\x1b@|\x1b[aE][\s\S]|\x1bp[\s\S]{3}|\x1d![\s\S]|\x1dV[\s\S]{2}/g, '').split('\n');
+  const lines = out.replace(/\x1b@|\x1b[aEJ][\s\S]|\x1bp[\s\S]{3}|\x1d[!B][\s\S]|\x1dV[\s\S]{2}/g, '').split('\n');
   for (const line of lines) assert.ok(line.length <= 32, `too long: "${line}"`);
   assert.deepEqual([...bytes.slice(-4)], [0x1d, 0x56, 0x42, 0x00], 'ends with a cut');
   assert.ok(lines.length > 10);
@@ -43,7 +44,7 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   assert.ok(out.includes('KITCHEN') && out.includes('Couch') && out.includes('6 guests') && out.includes('Receipt #1002'));
   assert.ok(out.includes('2 x Sweet Corn') && out.includes('1 x Carbonara'));
   assert.ok(!/P\d/.test(out), 'no prices on the kitchen slip');
-  const lines = out.replace(/\x1b@|\x1b[aE][\s\S]|\x1d![\s\S]/g, '').split('\n');
+  const lines = out.replace(/\x1b@|\x1b[aEJ][\s\S]|\x1d[!B][\s\S]/g, '').split('\n');
   for (const line of lines) assert.ok(line.length <= 32, `too long: "${line}"`);
   const receipt = encodeReceipt(order, settings, { columns: 32, cut: true, drawer: false });
   const both = joinPrints(receipt, slip);
@@ -131,4 +132,39 @@ test('Bluetooth printing finds the printer’s print channel and piece size, rec
   const fresh = await import('../client/src/printing/escpos.ts?fresh');
   await assert.rejects(fresh.sendToPrinter('ble', receipt), /isn’t connected/);
   delete globalThis.navigator.bluetooth;
+});
+
+test('the receipt has the logo, spaced-out items with unit prices, the discount, and a tear line before the kitchen slip', () => {
+  // A 16 x 4 "logo": dark lettering (dark red) on orange, with a white margin around it.
+  const w = 20, h = 6, rgba = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4, lettering = x >= 2 && x < 18 && y >= 1 && y < 5 && (x + y) % 2 === 0;
+    rgba.set(lettering ? [90, 14, 10, 255] : [240, 112, 33, 255], i);
+  }
+  const box = darkBox(rgba, w, h);
+  assert.equal(box.x, 2); assert.equal(box.y, 1); assert.equal(box.height, 4);
+  const logo = toBitmap(rgba, w, h, 384);
+  assert.equal(logo.width, 384); assert.equal(logo.data.length, 48 * h);
+  // The orange prints as paper, the lettering as dots, centred: the first dark dot sits 182 + 2 dots in.
+  const firstRow = [...logo.data.slice(48, 96)].flatMap((b, i) => [...Array(8)].map((_, bit) => (b >> (7 - bit)) & 1 ? i * 8 + bit : -1)).filter(d => d >= 0);
+  assert.equal(firstRow[0], 182 + 3);
+  assert.ok(logo.data.slice(0, 48).every(b => b === 0), 'the orange margin row prints nothing');
+
+  const order = { label: '1004', created_at: '2026-10-25T04:00:00Z', table_name: 'Couch', guests: 6,
+    items: [{ name: 'Sweet Corn', qty: 2, unit_price_cents: 9000 }, { name: 'Iced Spanish Latte', qty: 1, unit_price_cents: 18500 }],
+    subtotal_cents: 36500, discount_cents: 7300, discount_label: 'Senior', total_cents: 29200, cash_tendered_cents: 30000, change_cents: 800 };
+  const bytes = encodeReceipt(order, { ...settings, logo }, { columns: 32, cut: false, drawer: false }), out = text(bytes);
+  const at = out.indexOf('\x1dv0\x00');
+  assert.ok(at > 0, 'the logo is sent as a picture');
+  assert.deepEqual([...bytes.slice(at + 4, at + 8)], [48, 0, h, 0], '48 bytes (384 dots) wide, 6 rows tall');
+  assert.ok(!out.includes('Cafe Ambiente\n'), 'the logo replaces the printed name');
+  assert.ok(out.includes('\x1bJ\x12'), 'items have extra paper (18 dots) between them');
+  assert.ok(out.includes('P90.00 each'), 'a line with more than one gets its unit price');
+  assert.ok(out.includes('Discount (Senior)') && out.includes('-P73.00'));
+  assert.ok(out.includes('* Thank you! *'));
+  const slip = text(encodeKitchenSlip(order, { columns: 32, cut: false, drawer: false }));
+  assert.ok(slip.includes('\x1dB\x01') && slip.includes(' KITCHEN ORDER '), 'the kitchen slip has a black band');
+  assert.ok(text(tearOff({ columns: 32, cut: false, drawer: false })).includes('tear here'));
+  // Without a logo the café's name prints large instead.
+  assert.ok(text(encodeReceipt(order, settings, { columns: 32, cut: false, drawer: false })).includes('Cafe Ambiente'));
 });
