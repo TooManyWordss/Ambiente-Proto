@@ -403,3 +403,4 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .restart-banner code{background:rgb(0 0 0/.18);padding:1px 6px;border-radius:5px}
 .ble-advanced{margin:4px 0 8px;display:grid;gap:8px}
 .ble-advanced summary{cursor:pointer;font-weight:700;color:var(--accent)}
+.ble-details{font-size:.8rem;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px 10px}

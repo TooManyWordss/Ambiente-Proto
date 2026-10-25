@@ -86,6 +86,7 @@ test('Bluetooth printing finds the printer’s print channel and piece size, rec
   written.length = 0; plan.modes.length = 0;
   await sendToPrinter('ble', receipt);
   assert.equal((await import('../client/src/printing/escpos.ts')).lastBleReport.tries, 1);
+  assert.ok(plan.modes.every(m => m === 'with'), 'automatic waits for the printer to confirm each piece when it can');
 
   // The printer slept: the next print reconnects and uses the new connection.
   written.length = 0; device.gatt.connected = false; device.listeners.gattserverdisconnected?.();

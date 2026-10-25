@@ -232,14 +232,15 @@ async function sendBle(bytes: Uint8Array) {
       let sent = 0, pieces = 0, mode = '';
       try {
         const c = await bleCharacteristic();
-        const noResponse = settings.write === 'no-response' || (settings.write === 'auto' && c.properties.writeWithoutResponse);
+        // Automatic prefers "with response": the printer confirms each piece before the next is sent, so a
+        // small buffer (common on 58 mm printers such as the Xprinter 58IIH) never overflows. Unconfirmed
+        // writes, when that's all a channel takes, get a short pause after every piece instead.
+        const noResponse = settings.write === 'no-response' || (settings.write === 'auto' && !c.properties.write);
         mode = noResponse ? 'without response' : 'with response';
         for (; sent < bytes.length; sent += size, pieces++) {
           const chunk = bytes.slice(sent, sent + size);
-          if (noResponse) await c.writeValueWithoutResponse(chunk);
+          if (noResponse) { await c.writeValueWithoutResponse(chunk); await pause(25); }
           else await (c.writeValueWithResponse ? c.writeValueWithResponse(chunk) : c.writeValue(chunk));
-          // A short breather every ~160 bytes so a small printer buffer keeps up.
-          if (noResponse && ((pieces + 1) * size) % 160 < size) await pause(20);
         }
         if (settings.size === 'auto') save(BLE_WORKED_KEY, String(size));
         if (settings.channel === 'auto') save(BLE_CHANNEL_KEY, target.channels[at].characteristic);
