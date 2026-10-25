@@ -165,8 +165,38 @@ async function bleCharacteristic() {
 // so the receipt goes in 20-byte pieces with a short pause every few pieces.
 export const BLE_CHUNK = 20;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// Chrome forgets the printer when the page reloads. Where it allows it (getDevices), the printer picked
+// last time is found again without a tap, by the name remembered on this tablet.
+const BLE_NAME_KEY = '5way.blePrinter';
+const rememberedName = () => { try { return localStorage.getItem(BLE_NAME_KEY); } catch { return null; } };
+async function attachBle(device: any) {
+  const server = await device.gatt.connect();
+  device.addEventListener?.('gattserverdisconnected', () => { bleChar = null; });
+  for (const uuid of BLE_SERVICES) {
+    try {
+      const service = await server.getPrimaryService(uuid);
+      const characteristic = (await service.getCharacteristics()).find((c: any) => c.properties.write || c.properties.writeWithoutResponse);
+      if (characteristic) {
+        bleTarget = { device, service: uuid, characteristic: characteristic.uuid, name: device.name || 'Bluetooth printer' }; bleChar = characteristic;
+        try { localStorage.setItem(BLE_NAME_KEY, bleTarget.name); } catch { /* not remembered; Connect still works */ }
+        return bleTarget.name;
+      }
+    } catch { /* not this service */ }
+  }
+  device.gatt.disconnect();
+  throw new Error('This printer does not accept print data over Bluetooth Low Energy. Use the RawBT app instead.');
+}
+async function bleFromEarlier() {
+  const bluetooth = (navigator as any).bluetooth, name = rememberedName();
+  if (!bluetooth?.getDevices || !name) return false;
+  for (const device of await bluetooth.getDevices().catch(() => [])) {
+    if (device.name !== name) continue;
+    try { await attachBle(device); return true; } catch { /* try the next one */ }
+  }
+  return false;
+}
 async function sendBle(bytes: Uint8Array) {
-  if (!bleTarget) throw new Error('Bluetooth printer not connected. Open Printer settings and tap Connect.');
+  if (!bleTarget && !(await bleFromEarlier())) throw new Error('The Bluetooth printer isn’t connected. Chrome forgets it when the page reloads.');
   for (let attempt = 1; ; attempt++) {
     let sent = 0;
     try {
@@ -198,18 +228,7 @@ export async function connectPrinter(method: PrintMethod): Promise<string> {
   if (method === 'ble') {
     const bluetooth = (navigator as any).bluetooth;
     if (!bluetooth) throw new Error('This browser cannot use Bluetooth printers. Use Chrome over HTTPS, or the RawBT app.');
-    const device = await bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
-    const server = await device.gatt.connect();
-    device.addEventListener?.('gattserverdisconnected', () => { bleChar = null; });
-    for (const uuid of BLE_SERVICES) {
-      try {
-        const service = await server.getPrimaryService(uuid);
-        const characteristic = (await service.getCharacteristics()).find((c: any) => c.properties.write || c.properties.writeWithoutResponse);
-        if (characteristic) { bleTarget = { device, service: uuid, characteristic: characteristic.uuid, name: device.name || 'Bluetooth printer' }; bleChar = characteristic; return bleTarget.name; }
-      } catch { /* not this service */ }
-    }
-    device.gatt.disconnect();
-    throw new Error('This printer does not accept print data over Bluetooth Low Energy. Use the RawBT app instead.');
+    return attachBle(await bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES }));
   }
   return method === 'rawbt' ? 'RawBT app' : 'Print screen';
 }

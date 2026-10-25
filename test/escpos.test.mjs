@@ -64,8 +64,9 @@ test('Bluetooth printing sends 20-byte pieces, reconnects after a drop and never
       if (written.length >= plan.failAfter) throw new Error('GATT operation failed for unknown reason.');
       written.push([...chunk]);
     } });
+  if (!globalThis.localStorage?.setItem) { const store = new Map(); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) } }); }
   const server = { async getPrimaryService(uuid) { if (uuid !== '000018f0-0000-1000-8000-00805f9b34fb') throw new Error('no'); return { getCharacteristics: async () => [characteristic()], getCharacteristic: async () => characteristic() }; } };
-  Object.defineProperty(globalThis.navigator, 'bluetooth', { value: { requestDevice: async () => device }, configurable: true });
+  Object.defineProperty(globalThis.navigator, 'bluetooth', { value: { requestDevice: async () => device, getDevices: async () => [device] }, configurable: true });
 
   assert.equal(await connectPrinter('ble'), 'Fake 58H');
   const receipt = encodeReceipt({ label: '1003', items: [{ name: 'Sweet Corn', qty: 2, unit_price_cents: 9000 }], total_cents: 18000 }, settings, { columns: 32, cut: false, drawer: false });
@@ -88,5 +89,16 @@ test('Bluetooth printing sends 20-byte pieces, reconnects after a drop and never
   written.length = 0; plan.failAfter = 3;
   await assert.rejects(sendToPrinter('ble', receipt), /Switch the printer off and on/);
   assert.equal(written.length, 3);
+
+  // After the page reloads (a fresh copy of the code knows no printer), the printer chosen before is
+  // found again without a tap, by its remembered name.
+  plan.failAfter = Infinity; written.length = 0; device.gatt.connected = false;
+  const reloaded = await import('../client/src/printing/escpos.ts?reloaded');
+  await reloaded.sendToPrinter('ble', receipt);
+  assert.deepEqual(written.flat(), [...receipt]);
+  // A printer that was never chosen on this tablet still needs Connect.
+  localStorage.removeItem('5way.blePrinter');
+  const fresh = await import('../client/src/printing/escpos.ts?fresh');
+  await assert.rejects(fresh.sendToPrinter('ble', receipt), /isn’t connected/);
   delete globalThis.navigator.bluetooth;
 });
