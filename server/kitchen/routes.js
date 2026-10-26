@@ -1,8 +1,10 @@
-import { requireRole } from '../auth/sessions.js';
+import { requireRole, stationOf } from '../auth/sessions.js';
+import { currentStore } from '../core/config.js';
 import { db } from '../core/db.js';
 import { dayRange } from '../core/dates.js';
 import { attachItems, loadOrder } from '../sales/orders.js';
 import { app, screenCounts, storeBroadcast } from '../core/http.js';
+import { ticketState } from '../../dining-domain.js';
 
 // ---------- Kitchen ----------
 
@@ -11,6 +13,26 @@ import { app, screenCounts, storeBroadcast } from '../core/http.js';
 app.get('/api/pos/kitchen-screens', (req, res) => {
   res.json({ screens: screenCounts().kitchen });
 });
+
+// ---------- Ready to collect ----------
+
+// Kitchen orders finished in the last hour, for the till that took them. The POS shows each one, with a
+// chime, until someone taps "Picked up". Counter orders and table orders (from Unpaid tabs) both count.
+const PICKUP_WINDOW_MS = 60 * 60 * 1000;
+const kitchenItems = (lines) => lines.filter((l) => l.sends_to_kitchen && l.qty > 0).map((l) => ({ name: l.name, qty: l.qty }));
+export function readyForPickup(station) {
+  const since = new Date(Date.now() - PICKUP_WINDOW_MS).toISOString();
+  const orders = attachItems(db.prepare("SELECT * FROM orders WHERE status = 'paid' AND kitchen_status = 'ready' AND kitchen_ready_at >= ? AND station = ?").all(since, station))
+    .map((o) => ({ key: `order:${o.id}`, title: o.table_name ?? 'Takeout', label: o.receipt_label, items: kitchenItems(o.items), ready_at: o.kitchen_ready_at }));
+  if (station !== 'cashier' || currentStore() !== 'ambiente') return orders;
+  const visits = db.prepare("SELECT document FROM dining_visits WHERE EXISTS (SELECT 1 FROM json_each(document, '$.submissions') s WHERE json_extract(s.value, '$.ready_at') >= ?)").all(since).map((r) => JSON.parse(r.document));
+  const tables = visits.flatMap((v) => v.submissions.filter((s) => s.ready_at >= since && !s.cancelled_at && ticketState(s) === 'ready')
+    .map((s) => ({ key: `table:${s.id}`, title: v.table_name, label: null, items: kitchenItems(s.lines), ready_at: s.ready_at })));
+  return [...orders, ...tables].sort((a, b) => a.ready_at.localeCompare(b.ready_at));
+}
+app.get('/api/pos/ready', (req, res) => res.json(readyForPickup(stationOf(req, req.query.station))));
+// Tells the tills to reload their ready-to-collect list.
+export const announcePickup = () => storeBroadcast(['pos', 'barista']).emit('pickup.updated');
 
 // Kitchen display: today's tickets not yet finished, oldest first. Tickets left open on earlier days
 // aren't shown, so forgotten ones never push today's orders off the screen.
@@ -45,6 +67,7 @@ app.patch('/api/orders/:id/kitchen', requireRole('kitchen'), (req, res) => {
   if(status==='ready')db.prepare('UPDATE order_items SET ready_qty = qty WHERE order_id = ? AND sends_to_kitchen = 1').run(order.id);
   const updated = loadOrder(order.id);
   storeBroadcast(['kitchen', 'admin']).emit('ticket.updated', updated);
+  if ((updated.kitchen_status === 'ready') !== (order.kitchen_status === 'ready')) announcePickup();
   res.json(updated);
 });
 
@@ -84,5 +107,6 @@ app.patch('/api/orders/:id/items/:itemId/kitchen', requireRole('kitchen'), (req,
 
   const updated = loadOrder(order.id);
   storeBroadcast(['kitchen', 'admin']).emit('ticket.updated', updated);
+  if ((updated.kitchen_status === 'ready') !== (order.kitchen_status === 'ready')) announcePickup();
   res.json(updated);
 });

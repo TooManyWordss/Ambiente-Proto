@@ -325,7 +325,7 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .fm-key .fm-swatch.selected{background:var(--accent);border-color:var(--text)}
 /* Owner's live panel: screens along the top, then tills, kitchen and tables side by side on a tablet. */
 .live-panel{display:grid;gap:14px}
-.lp-screens{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.lp-screens{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.lp-all{border-style:dashed}
 .lp-screen{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:10px;align-items:center;padding:12px 14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);color:var(--text);text-decoration:none;box-shadow:var(--shadow)}
 .lp-screen:hover{border-color:var(--accent)}
 .lp-dot{grid-row:1/3;width:12px;height:12px;border-radius:50%;background:var(--border)}
@@ -366,7 +366,7 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .lp-ticket footer{font-size:.82rem;color:var(--muted)}
 .lp-tables .floor-map svg{max-height:none}
 @media (max-width:1100px){.lp-grid{grid-template-columns:1fr 1fr}.lp-tables{grid-column:1/-1}}
-@media (max-width:760px){.lp-screens{grid-template-columns:repeat(2,minmax(0,1fr))}.lp-grid{grid-template-columns:1fr}.lp-tickets{max-height:none}}
+@media (max-width:1100px){.lp-screens{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (max-width:760px){.lp-screens{grid-template-columns:repeat(2,minmax(0,1fr))}.lp-grid{grid-template-columns:1fr}.lp-tickets{max-height:none}}
 /* Order menu: one tap adds; sizes share a card; a count shows what's already in the order. */
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .menu-content .menu-grid{grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}
@@ -414,4 +414,40 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
   .r-tear{margin:14mm 0 6mm;text-align:center;font-size:9pt;letter-spacing:.1em}
   .r-banner{background:#000;color:#fff;font-weight:800;font-size:16pt;letter-spacing:.08em;padding:4px 0;margin-bottom:4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .r-slip-line{margin:8px 0}
+}
+/* "Ready to collect" alerts on the till: stay on top of the screen until tapped. */
+.pickup-alerts{position:fixed;z-index:19;top:calc(env(safe-area-inset-top) + 70px);left:50%;transform:translateX(-50%);width:min(460px,calc(100% - 32px));display:grid;gap:8px;pointer-events:none}
+.pickup{pointer-events:auto;display:flex;align-items:center;gap:12px;padding:12px 12px 12px 16px;background:var(--surface);color:var(--text);border:2px solid var(--ok);border-radius:14px;box-shadow:0 12px 32px rgb(0 0 0/.22);animation:pickup-in .35s ease-out}
+.pickup-body{display:grid;gap:2px;min-width:0;flex:1}
+.pickup-kicker{font-size:.75rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ok)}
+.pickup-kicker::before{content:'';display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:var(--ok);vertical-align:1px;animation:pickup-pulse 1.4s ease-in-out infinite}
+.pickup-title{font-size:1.15rem}.pickup-title span{font-weight:600;color:var(--muted)}
+.pickup-items{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
+.pickup .btn{flex:none;min-height:46px}
+.pickup-more{pointer-events:auto;justify-self:center;border:0;border-radius:999px;padding:6px 14px;background:var(--ok);color:#fff;font:700 .85rem var(--body);cursor:pointer;box-shadow:0 6px 16px rgb(0 0 0/.18)}
+@keyframes pickup-in{from{opacity:0;transform:translateY(-12px)}}
+@keyframes pickup-pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.pickup,.pickup-kicker::before{animation:none}}
+/* General terminal: every screen side by side. The POS gets the tall tile on the left. */
+.terminal{height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr);background:var(--bg)}
+.term-head{display:flex;align-items:center;gap:14px;padding:10px max(16px,env(safe-area-inset-right)) 10px max(16px,env(safe-area-inset-left));padding-top:max(10px,env(safe-area-inset-top));border-bottom:1px solid var(--border);background:var(--surface)}
+.term-head>div{flex:1;min-width:0}.term-head h1{margin:0;font-family:var(--display);font-size:1.15rem}.term-head p{margin:0;color:var(--muted);font-size:.85rem}
+.term-grid{display:grid;gap:10px;padding:10px;min-height:0;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));grid-template-areas:"pos kitchen barista" "pos inventory admin"}
+.term-pos{grid-area:pos}.term-kitchen{grid-area:kitchen}.term-barista{grid-area:barista}.term-inventory{grid-area:inventory}.term-admin{grid-area:admin}
+.term-grid.has-focus{grid-template-columns:minmax(0,1fr) minmax(220px,22%);grid-template-rows:repeat(4,minmax(0,1fr));grid-template-areas:none}
+.term-grid.has-focus .term-screen{grid-area:auto;grid-column:2}.term-grid.has-focus .term-screen.focused{grid-column:1;grid-row:1/-1}
+.term-screen{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.term-screen.focused{border-color:var(--accent)}
+.term-screen>header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 6px 5px 12px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+.term-screen>header strong{font-size:.9rem;letter-spacing:.02em}
+.term-head a.btn{text-decoration:none;color:var(--text)}
+.term-actions{display:flex;gap:2px}.term-actions .btn{padding:4px 8px;font-size:.78rem;border-color:transparent;text-decoration:none;color:var(--text)}
+.term-frame{position:relative;overflow:hidden;min-height:0}
+.term-frame iframe{position:absolute;top:0;left:0;border:0;transform-origin:0 0;background:var(--bg)}
+.term-grid.has-focus .term-screen:not(.focused) .term-actions .btn:not(:first-child){display:none}
+@media (max-width:800px){
+  .terminal{height:auto;min-height:100dvh}
+  .term-head .btn{display:none}
+  .term-grid,.term-grid.has-focus{grid-template-columns:minmax(0,1fr);grid-template-rows:none;grid-template-areas:none;grid-auto-rows:78dvh}
+  .term-grid .term-screen,.term-grid.has-focus .term-screen,.term-grid.has-focus .term-screen.focused{grid-area:auto}
 }

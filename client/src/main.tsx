@@ -9,6 +9,7 @@ import { Launcher } from './launcher/Launcher';
 import { Login } from './login/Login';
 import { Pos } from './pos/Pos';
 import { RestartNeeded } from './shared/ui';
+import { Terminal } from './terminal/Terminal';
 import { roleName } from './shared/format';
 import { screenPath, STORE, STORE_NAME, storeUrl } from './shared/store';
 import type { Role } from './shared/types';
@@ -20,7 +21,7 @@ function App(){
   const loginRole=(['pos','barista','kitchen','inventory','admin'].includes(params.get('role')??'')?params.get('role'):'admin') as Role;
   useEffect(()=>{
     const role:Role|undefined=path==='/login'||path==='/login.html'?loginRole:(['pos','barista','kitchen','inventory','admin'].includes(path.slice(1))?path.slice(1) as Role:undefined);
-    document.title=role?`${STORE_NAME} · ${roleName[role]}`:`${STORE_NAME} · POS System`;
+    document.title=role?`${STORE_NAME} · ${roleName[role]}`:path==='/terminal'?`${STORE_NAME} · General terminal`:`${STORE_NAME} · POS System`;
     if(STORE==='rairock'){
       document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href','/rairock/brand/icon-512.png');
       document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.setAttribute('href','/rairock/brand/icon-512.png');
@@ -40,6 +41,7 @@ function App(){
   if(path==='/kitchen')return <Kitchen/>;
   if(path==='/inventory')return <Inventory/>;
   if(path==='/admin')return <Admin/>;
+  if(path==='/terminal')return <Terminal/>;
   return <Launcher/>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><AppErrorBoundary><App/><RestartNeeded/>{STORE==='ambiente'&&<BusinessUndo/>}</AppErrorBoundary></React.StrictMode>);

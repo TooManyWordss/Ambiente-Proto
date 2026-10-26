@@ -37,6 +37,7 @@ export function LivePanel({ tables, lowStock, liveTick, screens }: {
         <span className="lp-dot" aria-hidden="true" /><span className="lp-screen-name">{label}</span>
         <span className="lp-screen-state">{n ? (n === 1 ? 'Open' : `${n} open`) : 'Not open'}</span><span className="lp-open">Open ›</span>
       </a>; })}
+      <a className="lp-screen lp-all" href={storeUrl('/terminal')} target="_top"><span className="lp-screen-name">All screens</span><span className="lp-screen-state">Side by side</span><span className="lp-open">Open ›</span></a>
     </section>
     <div className="lp-grid">
       <section className="panel lp-tills"><h2>Tills today</h2>

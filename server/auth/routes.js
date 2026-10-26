@@ -43,6 +43,13 @@ for (const [role, page] of Object.entries(PAGE)) {
   });
 }
 
+// The owner's general terminal: every screen side by side on one page.
+app.get('/terminal', (req, res) => {
+  if (readSession(req.headers.cookie)?.role !== 'admin') return res.redirect(storePath(req, '/login?role=admin&next=terminal'));
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
 app.post('/api/login', (req, res) => {
   const { role, secret } = req.body ?? {};
   if (!isRole(role)) return res.status(400).json({ error: 'Unknown screen' });

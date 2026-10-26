@@ -2,15 +2,18 @@ import { useEffect, useState, FormEvent } from 'react';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import { api } from '../shared/api';
 import { roleName } from '../shared/format';
+import { storeUrl } from '../shared/store';
 import type { Role } from '../shared/types';
 import { Logo } from '../shared/ui';
 
 export function Login({ role }: { role: Role }) {
   const [secret, setSecret] = useState(''), [error, setError] = useState(''), [setup, setSetup] = useState(false), [code, setCode] = useState(''), [pinAllowed, setPinAllowed] = useState(true), [passkeyAvailable, setPasskeyAvailable] = useState(false), [busy, setBusy] = useState(false);
   useEffect(() => { api<any>(`/api/login-options?role=${role}`).then((d) => { setPinAllowed(d.pin); setPasskeyAvailable(Boolean(window.isSecureContext && window.PublicKeyCredential && (role !== 'admin' || d.passkeys))); }).catch(() => {}); }, [role]);
+  // The general terminal sends the owner here to sign in, and back there afterwards.
+  const home = (to: string) => role === 'admin' && new URLSearchParams(location.search).get('next') === 'terminal' ? storeUrl('/terminal') : to;
   const post = <T = any,>(url: string, body: unknown) => api<T>(url, { method: 'POST', body, redirectOnUnauthorized: false });
-  async function pinLogin(e: FormEvent) { e.preventDefault(); setBusy(true); setError(''); try { location.href = (await post('/api/login', { role, secret })).home; } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
-  async function passkeyLogin() { setBusy(true); setError(''); try { const { options, challengeId } = await post('/api/passkeys/login/options', {}); const response = await startAuthentication({ optionsJSON: options }); location.href = (await post('/api/passkeys/login', { challengeId, response, role })).home; } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
+  async function pinLogin(e: FormEvent) { e.preventDefault(); setBusy(true); setError(''); try { location.href = home((await post('/api/login', { role, secret })).home); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
+  async function passkeyLogin() { setBusy(true); setError(''); try { const { options, challengeId } = await post('/api/passkeys/login/options', {}); const response = await startAuthentication({ optionsJSON: options }); location.href = home((await post('/api/passkeys/login', { challengeId, response, role })).home); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   async function setupPasskey(e: FormEvent) { e.preventDefault(); setBusy(true); setError(''); try { const { options, challengeId } = await post('/api/passkeys/setup', { code }); const response = await startRegistration({ optionsJSON: options }); location.href = (await post('/api/passkeys/register', { challengeId, response, device: navigator.userAgent.includes('iPad') ? 'iPad' : 'Device' })).home; } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   return <main className="login"><section className="login-card"><Logo large /><h1>{roleName[role]}</h1>
     {passkeyAvailable && !setup && <div className="passkey-area"><button className="btn primary bio-btn" onClick={passkeyLogin} disabled={busy}>◉　Sign in with Face ID / fingerprint</button><button className="link" onClick={() => setSetup(true)}>First time on this device? Set it up</button></div>}

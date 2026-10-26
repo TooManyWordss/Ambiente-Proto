@@ -10,7 +10,7 @@ import { __dirname, PORT, storeContext } from './server/core/config.js';
 import { readSession } from './server/auth/sessions.js';
 import { databases } from './server/core/db.js';
 import './server/core/init.js';
-import { app, httpServer, io, screenCounts } from './server/core/http.js';
+import { app, httpServer, io, SCREEN_ROLES, screenCounts } from './server/core/http.js';
 import './server/auth/routes.js';
 import './server/dining.js';
 import './server/passkeys/routes.js';
@@ -46,6 +46,10 @@ io.use((socket, next) => {
   socket.data.store = store;
   socket.data.role = session.role;
   socket.data.staffId = session.staff?.id ?? 0;
+  // The owner can open any screen (the general terminal shows them all). That screen then hears the same
+  // live updates as the real one, but isn't counted as a real one being open.
+  const screen = socket.handshake.auth?.screen;
+  if (session.role === 'admin' && SCREEN_ROLES.includes(screen) && screen !== 'admin') { socket.data.role = screen; socket.data.mirror = true; }
   next();
 });
 // The owner's live panel hears whenever a screen opens or closes.

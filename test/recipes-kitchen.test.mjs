@@ -99,9 +99,20 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
       const keptItem = kept.body.order.items.find((i) => i.menu_item_id === first.menu_item_id);
       assert.ok(keptItem.kitchen_ready_at);
       const last = kept.body.order.items.find((i) => i.menu_item_id === second.menu_item_id);
+      assert.deepEqual((await call('/api/pos/ready', pos)).body, []);
+      // Finishing the last item tells the till, which shows the order as ready to collect.
+      const till = connect(base, { extraHeaders: { cookie: pos }, auth: { store: 'ambiente' }, transports: ['websocket'] });
+      await new Promise((resolve, reject) => { till.on('connect', resolve); till.on('connect_error', reject); });
+      const told = new Promise((resolve) => till.once('pickup.updated', resolve));
       const done = await call(`/api/orders/${order.id}/items/${last.id}/kitchen`, kitchen, 'PATCH', { ready: true });
       assert.equal(done.body.kitchen_status, 'ready');
+      await told; till.close();
       assert.ok(!(await call('/api/kitchen/tickets', kitchen)).body.some((t) => t.id === order.id));
+      const [pickup] = (await call('/api/pos/ready', pos)).body;
+      assert.equal(pickup.key, `order:${order.id}`);
+      assert.equal(pickup.label, done.body.receipt_label);
+      assert.deepEqual(pickup.items, [{ name: first.name, qty: 1 }, { name: last.name, qty: 2 }]);
+      assert.equal((await call('/api/pos/ready', kitchen)).status, 401);
     }
 
     // The till can tell whether a kitchen screen is open, to know when to print a paper kitchen slip.
@@ -114,6 +125,19 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     assert.deepEqual((await call('/api/admin/screens', owner)).body, { pos: 0, barista: 0, kitchen: 1, inventory: 0, admin: 0 });
     assert.equal((await call('/api/admin/screens', pos)).status, 401);
     screen.close();
+
+    // The owner's general terminal opens every screen. Each hears that screen's updates but isn't counted
+    // as a real one (so with only the terminal's kitchen open, the till still prints paper kitchen slips).
+    const mirror = connect(base, { extraHeaders: { cookie: owner }, auth: { store: 'ambiente', screen: 'pos' }, transports: ['websocket'] });
+    await new Promise((resolve, reject) => { mirror.on('connect', resolve); mirror.on('connect_error', reject); });
+    assert.equal((await call('/api/admin/screens', owner)).body.pos, 0);
+    const heard = new Promise((resolve) => mirror.once('menu.updated', resolve));
+    await call(`/api/menu/${other.id}/availability`, pos, 'POST', { available: false });
+    await heard; mirror.close();
+    await call(`/api/menu/${other.id}/availability`, pos, 'POST', { available: true });
+    const terminal = (cookie) => fetch(`${base}/terminal`, { headers: cookie ? { cookie } : {}, redirect: 'manual' });
+    assert.equal((await terminal(owner)).status, 200);
+    assert.equal((await terminal(pos)).headers.get('location'), '/login?role=admin&next=terminal');
 
     // Tables: the sketch's layout is there, a party is seated, adds a second order, then bills out.
     const tables = (await call('/api/tables', pos)).body;

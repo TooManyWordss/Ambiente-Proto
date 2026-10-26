@@ -61,6 +61,9 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       assert.equal(v.submissions[0].lines[0].changes[0].previous_qty, 3);
       await act('kitchen.ready', visit, { submissionId: submission }, kitchen);
       assert.equal(ticketState((await snapshot()).visits[visit].submissions[0]), 'ready');
+      // The till lists the finished table order as ready to collect.
+      const pickups = (await request('/api/pos/ready', pos)).data;
+      assert.deepEqual(pickups.map(p => [p.key, p.title, p.items]), [[`table:${submission}`, 'Garden', [{ name: item.name, qty: 2 }]]]);
       const current = (await snapshot()).menu.find(m => m.id === item.id);
       await act('visit.submit', visit, { submissionId: id(), lines: [{ id: id(), menu_item_id: current.id, name: current.name, unit_price_cents: current.price_cents, sends_to_kitchen: current.sends_to_kitchen, qty: 1, note: '' }] });
       v = (await snapshot()).visits[visit];
