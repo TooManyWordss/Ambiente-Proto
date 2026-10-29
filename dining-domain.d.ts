@@ -7,6 +7,11 @@ export function text(value: unknown, label: string, max?: number, optional?: boo
 export function integer(value: unknown, label: string, min?: number, max?: number): number;
 export function timestamp(value: unknown): string;
 export function totals(visit: any, taxRate?: number): { subtotal_cents: number; discount_cents: number; tax_cents: number; total_cents: number };
+export const VAT_RATE: number;
+export const GROUP_LABELS: string[];
+export function groupShare(subtotal_cents: number, discount: any, taxRate?: number): { diners: number; parts: { who: string; count: number; rate: number; share: number; vat: number; discount: number }[]; share_cents: number; vat_cents: number; discount_cents: number };
+export function discountLines(subtotal_cents: number, discount: any, taxRate?: number): { label: string; cents: number }[];
+export function tableBill(orders: { id: number; items: { qty: number; unit_price_cents?: number }[] }[], discount: any, taxRate?: number): { subtotal_cents: number; discount_cents: number; tax_cents: number; total_cents: number; orders: { id: number; subtotal_cents: number; discount_cents: number; tax_cents: number; total_cents: number; discount: any }[] };
 export function ticketState(submission: any): string;
 export function linesOf(visit: any): any[];
 export function applyDining(state: DiningState, operation: DiningOperation, context: { role: string; menu: any[]; taxRate: number }): DiningState;

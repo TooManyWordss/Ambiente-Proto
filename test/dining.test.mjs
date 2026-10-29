@@ -203,6 +203,23 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       assert.equal((await request(`/api/dining/business-undo/${sale.data.undoId}`, pos, {})).status, 200);
       const invalid = await request('/api/orders', pos, { clientId: id(), items: [{ menuItemId: current.id, qty: 1 }], discount: { kind: 'percent', value: 10001, reason: 'Invalid', label: '' } });
       assert.equal(invalid.status, 400);
+      // Seniors and PWDs by group share: 1 PWD and 2 seniors of 5 diners at 20%. Tax is added on top here (12%),
+      // so their 3/5 share is left out of it instead of having VAT divided out.
+      const ids = [{ type: 'PWD', id: 'PWD-1' }, { type: 'Senior', id: 'OSCA-1' }, { type: 'Senior', id: 'OSCA-2' }];
+      const group = { kind: 'group', label: 'PWD & Senior', diners: 5, pwd: 1, senior: 2, pwd_rate: 2000, senior_rate: 2000, vat_exempt: true, ids, reason: 'Group share' };
+      const grouped = await request('/api/orders', pos, { clientId: id(), items: [{ menuItemId: current.id, qty: 5 }], discount: group });
+      assert.equal(grouped.status, 201, JSON.stringify(grouped.data));
+      const sub = current.price_cents * 5, pwdShare = Math.round(sub / 5), seniorShare = Math.round(sub * 2 / 5);
+      assert.deepEqual([grouped.data.discount_cents, grouped.data.tax_cents], [Math.round(pwdShare * 0.2) + Math.round(seniorShare * 0.2), Math.round((sub - pwdShare - seniorShare) * 0.12)]);
+      // The VAT-inclusive rule (no tax on top): their share ÷ 1.12, then 20% off. ₱1,000 share → pays ₱714.29.
+      const inclusive = totals({ discount: { ...group, label: 'Senior', pwd: 0, senior: 1, ids: [ids[1]] }, submissions: [{ lines: [{ qty: 1, unit_price_cents: 500000 }] }] }, 0);
+      assert.equal(inclusive.discount_cents, 28571);
+      assert.equal(inclusive.total_cents, 400000 + 71429);
+      // Each senior and PWD needs an ID number, and there can't be more of them than diners.
+      for (const bad of [{ ...group, ids: ids.slice(1) }, { ...group, ids: [{ type: 'PWD', id: ' ' }, ...ids.slice(1)] }, { ...group, diners: 2 }, { ...group, label: 'PWD' }]) {
+        assert.equal((await request('/api/orders', pos, { clientId: id(), items: [{ menuItemId: current.id, qty: 1 }], discount: bad })).status, 400);
+      }
+      assert.equal((await request(`/api/orders/${grouped.data.id}/void`, pos, { reason: 'test' })).status, 200);
       // A failed legacy write must release its savepoint and leave the server usable.
       assert.equal((await request('/api/dining/state', owner)).status, 200);
     });

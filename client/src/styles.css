@@ -509,3 +509,31 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .weigh-size strong{font:800 1.5rem var(--display);color:var(--text)}
 .weigh-size.active{border-color:var(--accent);background:var(--accent);color:var(--accent-text)}.weigh-size.active strong{color:var(--accent-text)}
 .weigh-result{margin:0;min-height:1.5em;font-size:1.05rem}
+/* Discounts: senior / PWD by group share, or another discount. */
+.discount-form{display:grid;gap:12px}
+.gd-modes{display:flex;flex-wrap:wrap;gap:6px}.gd-modes .chip{min-height:40px;border:1px solid var(--border);background:var(--surface);color:var(--text)}.gd-modes .chip.active{border-color:var(--accent);background:var(--accent);color:var(--accent-text)}
+.gd-counts{display:grid;gap:6px}.gd-count{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:700}
+.gd-rates{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.gd-rate span{display:flex;align-items:center;gap:6px}.gd-rate input{max-width:110px}
+.gd-ids{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:0;padding:10px;border:1px solid var(--border);border-radius:12px}.gd-ids legend{padding:0 6px;font-weight:700}
+.gd-preview{padding-top:8px;border-top:1px solid var(--border)}
+/* Bill out: a table's orders, discount, cash, and the receipt. */
+.bill-out{display:grid;gap:12px}
+.bill-orders{list-style:none;margin:0;padding:0;display:grid;gap:10px;max-height:38vh;overflow:auto}
+.bill-orders>li{padding:8px 0;border-bottom:1px solid var(--border)}
+.bill-order-head{display:flex;justify-content:space-between;color:var(--muted);font-size:.9rem;margin-bottom:4px}
+.bill-line{display:flex;justify-content:space-between;gap:12px;padding:2px 0}.bill-line span:last-child{font-variant-numeric:tabular-nums}
+.bill-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.bill-tools .btn:last-child{margin-left:auto}
+.table-bill{font-size:1.05rem}
+/* The café's on-screen keyboard: letters for names and notes, a number pad for amounts, PINs and weights. */
+.screen-keyboard{position:fixed;left:0;right:0;bottom:0;z-index:60;background:var(--surface-2);border-top:1px solid var(--border);padding:8px max(8px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));box-shadow:0 -8px 24px #0002;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+.kb-bar{display:flex;align-items:center;gap:8px;max-width:980px;margin:0 auto 6px}.kb-for{flex:1;min-width:0;color:var(--muted);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-rows{display:grid;gap:6px;max-width:980px;margin:0 auto}.kb-row{display:flex;gap:6px;justify-content:center}
+.kb-key{flex:1 1 0;min-width:0;height:52px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;font-size:1.25rem;font-weight:600;cursor:pointer;box-shadow:0 1px 0 #0002}
+.kb-key:active{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+.kb-mod{flex:1.5 1 0;background:var(--surface-2)}.kb-mod.active{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+.kb-space{flex:6 1 0;font-size:1rem;color:var(--muted)}.kb-enter{flex:2 1 0;background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+.kb-small{flex:none;height:38px;padding:0 12px;font-size:.9rem}
+.kb-numeric .kb-bar{max-width:440px}.kb-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-width:440px;margin:0 auto}.kb-pad .kb-key{height:56px;font-size:1.5rem}.kb-pad .kb-wide{grid-column:1/-1;font-size:1.15rem}
+.kb-switch{position:fixed;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:60;padding:10px 14px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text);font:inherit;font-weight:700;box-shadow:0 4px 14px #0003}
+body.kb-open{padding-bottom:var(--kb-h)}body.kb-open .pos-shell{height:calc(100dvh - var(--kb-h))}
+body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:calc(100dvh - var(--kb-h) - 32px)}

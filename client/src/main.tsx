@@ -10,6 +10,7 @@ import { Login } from './login/Login';
 import { Pos } from './pos/Pos';
 import { RestartNeeded } from './shared/ui';
 import { Picker } from './terminal/Picker';
+import { ScreenKeyboard } from './shared/ScreenKeyboard';
 import { Terminal } from './terminal/Terminal';
 import { roleName } from './shared/format';
 import { screenPath, STORE, STORE_NAME, storeUrl } from './shared/store';
@@ -46,4 +47,4 @@ function App(){
   if(path==='/terminal/all')return <Terminal/>;
   return <Launcher/>;
 }
-createRoot(document.getElementById('root')!).render(<React.StrictMode><AppErrorBoundary><App/><RestartNeeded/>{STORE==='ambiente'&&<BusinessUndo/>}</AppErrorBoundary></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><AppErrorBoundary><App/><RestartNeeded/><ScreenKeyboard/>{STORE==='ambiente'&&<BusinessUndo/>}</AppErrorBoundary></React.StrictMode>);

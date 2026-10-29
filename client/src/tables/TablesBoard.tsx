@@ -18,8 +18,9 @@ export function TablesBoard({ tables, chosenId, onChoose, onBillOut, onTakeout, 
     <div className="table-detail">{!t ? (quickSeat ? null : <p className="hint">{busy} of {tables.length} tables occupied. Tap a table on the map.</p>) : t.party ? <>
       <h3>{t.name} <span className="pill void">Occupied</span>{t.party.customer_tag && <span className="pill">{tagName(t.party.customer_tag)}</span>}</h3>
       <p>Seated {time(t.party.seated_at)} · {minutesSince(t.party.seated_at)} min{t.party.guests ? ` · ${t.party.guests} guests` : ''}</p>
-      <p>{t.party.receipts.map(r => `#${r.label} ${money(r.total_cents)} (${time(r.created_at)})`).join(' · ')} · <strong>{money(t.party.total_cents)}</strong></p>
-      <div className="sheet-actions"><button className="btn danger-outline" onClick={() => { if (confirm(`Bill out ${t.name}? The table becomes free.`)) onBillOut(t); }}>Bill out · table free</button><button className="btn primary" onClick={() => onChoose({ id: t.id, name: t.name, guests: t.party!.guests, tag: (t.party!.customer_tag as any) ?? null, seatedAt: t.party!.seated_at })}>Add an order to {t.name}</button></div>
+      <p>{t.party.receipts.map(r => `#${r.label} ${money(r.total_cents)} (${time(r.created_at)})${r.paid ? ' paid' : ''}`).join(' · ')}</p>
+      <p className="table-bill">{t.party.unpaid_cents ? <>Bill so far <strong>{money(t.party.unpaid_cents)}</strong> · not paid yet</> : 'Everything is paid.'}</p>
+      <div className="sheet-actions"><button className="btn primary" onClick={() => onBillOut(t)}>Bill out</button><button className="btn" onClick={() => onChoose({ id: t.id, name: t.name, guests: t.party!.guests, tag: (t.party!.customer_tag as any) ?? null, seatedAt: t.party!.seated_at })}>Add an order to {t.name}</button></div>
     </> : <>
       <h3>{t.name} <span className="pill ready">Free</span> <span className="hint">{t.seats} seats</span></h3>
       <div className="table-form"><span>Guests</span><span className="qty"><button type="button" aria-label="One fewer guest" onClick={() => setGuests(g => Math.max(1, g - 1))}>−</button><span>{guests}</span><button type="button" aria-label="One more guest" onClick={() => setGuests(g => Math.min(50, g + 1))}>+</button></span>

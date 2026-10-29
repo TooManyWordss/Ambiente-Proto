@@ -119,9 +119,9 @@ test('tablet POS survives offline reload and an interrupted payment response wit
     await page.locator('.cart-head').getByRole('button', { name: 'Undo', exact: true }).click();
     assert.equal(await page.locator('.pos-cart .qty span').innerText(), '1');
     await page.getByRole('button', { name: 'Discount', exact: true }).click();
-    await page.getByLabel('Amount / percent').fill('20');
-    await page.locator('.sheet select[name=label]').selectOption('Senior');
-    await page.getByLabel('Reason', { exact: true }).fill('Staff-entered senior concession');
+    // A senior eating alone: their share is the whole bill. It is VAT-exempt, so no tax is added on it.
+    assert.equal(await page.getByRole('button', { name: 'Senior citizen', exact: true }).getAttribute('aria-pressed'), 'true');
+    await page.getByLabel('Senior ID (OSCA)').fill('OSCA-0001');
     await page.getByRole('button', { name: 'Apply discount', exact: true }).click();
     await page.getByRole('button', { name: 'Exact', exact: true }).click();
     await page.getByRole('button', { name: 'Complete sale', exact: true }).click();
@@ -129,7 +129,8 @@ test('tablet POS survives offline reload and an interrupted payment response wit
     await page.getByRole('button', { name: 'Undo saved action', exact: true }).waitFor();
     report = await (await context.request.get(`${server.base}/api/admin/day`)).json();
     assert.equal(report.summary.order_count, 2);
-    assert.equal(report.orders.find(o => !o.visit_id).discount_cents, Math.round(item.price_cents * 0.2));
+    const seniorSale = report.orders.find(o => !o.visit_id);
+    assert.deepEqual([seniorSale.discount_cents, seniorSale.tax_cents, JSON.parse(seniorSale.discount_json).ids], [Math.round(item.price_cents * 0.2), 0, [{ type: 'Senior', id: 'OSCA-0001' }]]);
     await page.getByRole('button', { name: 'Undo saved action', exact: true }).click();
     await page.locator('.dining-global-undo').getByRole('status').waitFor();
     assert.match(await page.locator('.dining-global-undo').innerText(), /Return/);
@@ -236,7 +237,7 @@ test('two offline tablets retain competing parties and cash bills through owner 
 });
 
 
-test('default tablet flow selects the floor-map table, confirms payment, and returns to seats', { timeout: 60000 }, async () => {
+test('default tablet flow sends a table’s order to the kitchen, then bills the table out with payment', { timeout: 60000 }, async () => {
   const server = await launch(), browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   try {
     const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
@@ -244,18 +245,27 @@ test('default tablet flow selects the floor-map table, confirms payment, and ret
     const page = await context.newPage(), errors=[];
     page.on('pageerror',e=>errors.push(e.message));
     await page.goto(server.base+'/pos');
+    await page.evaluate(()=>localStorage.setItem('5way.ambiente.autoPrint','false'));
     await page.getByRole('heading',{name:'Where are the customers sitting?',exact:true}).waitFor();
     await page.getByRole('button',{name:/^Table 1, .*free$/}).click();
     await page.getByRole('button',{name:'Yes, Table 1',exact:true}).click();
     await page.locator('.menu-item').first().click();
-    await page.getByRole('button',{name:'Next: Payment',exact:false}).click();
-    await page.getByRole('button',{name:'Yes, lock it in',exact:true}).click();
-    await page.getByRole('button',{name:'Exact',exact:true}).click();
-    await page.getByRole('button',{name:'Complete sale & print',exact:true}).click();
-    await page.getByRole('button',{name:'No',exact:true}).click();
+    // A table's order goes to the kitchen unpaid, and the till comes back to the seats.
+    await page.getByRole('button',{name:'Send to kitchen · Table 1',exact:false}).click();
+    await page.getByRole('button',{name:'Yes, send to Table 1',exact:true}).click();
     await page.getByRole('heading',{name:'Where are the customers sitting?',exact:true}).waitFor();
-    const report=await (await context.request.get(server.base+'/api/pos/today')).json();
-    assert.equal(report.orders.length,1);assert.equal(report.orders[0].table_name,'Table 1');
+    let report=await (await context.request.get(server.base+'/api/pos/today')).json();
+    assert.deepEqual(report.orders.map(o=>[o.table_name,o.status]),[['Table 1','open']]);
+    assert.equal(report.summary.order_count,0);
+    // Bill out takes the payment and frees the table.
+    await page.getByRole('button',{name:/^Table 1, .*occupied/}).click();
+    await page.getByRole('button',{name:'Bill out',exact:true}).click();
+    await page.getByRole('button',{name:'Exact',exact:true}).click();
+    await page.getByRole('button',{name:'Pay & print receipt',exact:true}).click();
+    await page.getByRole('button',{name:/^Table 1, .*free$/}).waitFor();
+    report=await (await context.request.get(server.base+'/api/pos/today')).json();
+    assert.deepEqual(report.orders.map(o=>[o.table_name,o.status,!!o.bill_id]),[['Table 1','paid',true]]);
+    assert.equal(report.summary.order_count,1);
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); await server.close(); }
 });

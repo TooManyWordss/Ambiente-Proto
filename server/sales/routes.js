@@ -32,7 +32,10 @@ const lineKey = (menuItemId, grams) => `${menuItemId}:${grams ?? ''}`;
 // POS or barista bar -> server: ring up a cash sale.
 app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   const { clientId, items, createdAt, cashTenderedCents } = req.body ?? {};
-  const discount = currentStore() === 'ambiente' ? req.body?.discount ?? null : null;
+  // A table's order can be paid later, at bill out: it goes to the kitchen now, and the discount and cash come then.
+  const payLater = req.body?.payLater === true;
+  if (payLater && !req.body?.table) return res.status(400).json({ error: 'Only a table’s order can be paid at bill out' });
+  const discount = currentStore() === 'ambiente' && !payLater ? req.body?.discount ?? null : null;
   const station = stationOf(req, req.body?.station);
   if (typeof clientId !== 'string' || clientId.length === 0 || clientId.length > 100) {
     return res.status(400).json({ error: 'clientId is required' });
@@ -70,7 +73,7 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   catch (e) { return res.status(400).json({ error: e.message }); }
   const { subtotal_cents: subtotal, tax_cents: tax, total_cents: total } = bill;
   let tendered = null;
-  if (cashTenderedCents !== undefined && cashTenderedCents !== null) {
+  if (!payLater && cashTenderedCents !== undefined && cashTenderedCents !== null) {
     if (!Number.isInteger(cashTenderedCents) || cashTenderedCents < 0) {
       return res.status(400).json({ error: 'Invalid cash amount' });
     }
@@ -107,12 +110,12 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
         .prepare(
           `INSERT INTO orders (client_id, station, receipt_no, created_at, payment_method, subtotal_cents, tax_cents,
              total_cents, kitchen_status, cash_tendered_cents, change_cents, staff_id, staff_name,
-             table_id, table_name, guests, customer_tag, seated_at, discount_cents, discount_json)
-           VALUES (?, ?, ?, ?, 'cash', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             table_id, table_name, guests, customer_tag, seated_at, discount_cents, discount_json, status)
+           VALUES (?, ?, ?, ?, 'cash', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(clientId, station, next, rungUpAt, subtotal, tax, total, kitchenStatus, tendered,
           tendered === null ? null : tendered - total, req.staff?.id ?? null, req.staff?.name ?? null,
-          table?.id ?? null, table?.name ?? null, guests, customerTag, seatedAt, bill.discount_cents, JSON.stringify(discount))
+          table?.id ?? null, table?.name ?? null, guests, customerTag, seatedAt, bill.discount_cents, JSON.stringify(discount), payLater ? 'open' : 'paid')
         .lastInsertRowid
     );
     const insertItem = db.prepare(
@@ -211,7 +214,8 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
     const prev = before.get(id), line = lines.find((l) => l.key === id);
     if (prev && line && (prev.note ?? '') !== line.note) changes.push(line.note ? `Note on ${name}: "${line.note}"` : `Note on ${name} removed`);
   }
-  const discount = currentStore() === 'ambiente' && Object.hasOwn(req.body, 'discount') ? req.body.discount : JSON.parse(order.discount_json ?? 'null');
+  // A table's unpaid order gets its discount when the table pays.
+  const discount = order.status === 'open' ? null : currentStore() === 'ambiente' && Object.hasOwn(req.body, 'discount') ? req.body.discount : JSON.parse(order.discount_json ?? 'null');
   if (JSON.stringify(discount) !== JSON.stringify(JSON.parse(order.discount_json ?? 'null'))) changes.push('Discount updated');
   if (changes.length === 0) return res.status(400).json({ error: 'Nothing was changed' });
 

@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { io as connect } from 'socket.io-client';
 import { fileURLToPath } from 'node:url';
+import { tableBill } from '../dining-domain.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -213,6 +214,34 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     assert.ok(heat.tables.every((t) => t.id === t5.id || t.seatings === 0));
     assert.equal((await call('/api/admin/table-heat?days=5', owner)).status, 400);
     assert.equal((await call('/api/admin/table-heat', pos)).status, 401);
+
+    // Pay at bill out: a table's orders go to the kitchen unpaid, and the table pays them together, with a
+    // senior's group-share discount on the whole bill. Only then do they count as sales.
+    const t6 = tables.find((t) => t.name === 'Table 6'), table6 = { tableId: t6.id, guests: 4 };
+    const salesBefore = (await call('/api/admin/day', owner)).body.summary.gross_cents;
+    assert.equal((await call('/api/orders', pos, 'POST', { clientId: 'later-0', payLater: true, items: [{ menuItemId: other.id, qty: 1 }] })).status, 400);
+    const round1 = await call('/api/orders', pos, 'POST', { clientId: 'later-1', payLater: true, cashTenderedCents: 1, discount: { kind: 'percent', value: 5000, reason: 'ignored', label: '' }, items: [{ menuItemId: other.id, qty: 2 }], table: table6 });
+    const round2 = await call('/api/orders', pos, 'POST', { clientId: 'later-2', payLater: true, items: [{ menuItemId: other.id, qty: 1 }], table: table6 });
+    assert.deepEqual([round1.status, round1.body.status, round1.body.discount_cents, round1.body.cash_tendered_cents, round2.body.status], [201, 'open', 0, null, 'open']);
+    assert.ok((await call('/api/kitchen/tickets', kitchen)).body.some((o) => o.id === round1.body.id), 'the kitchen cooks an unpaid table order');
+    assert.equal((await call('/api/admin/day', owner)).body.summary.gross_cents, salesBefore, 'unpaid orders are not sales yet');
+    const owing = (await call('/api/tables', pos)).body.find((t) => t.id === t6.id).party;
+    assert.equal(owing.unpaid_cents, round1.body.total_cents + round2.body.total_cents);
+    assert.equal((await call(`/api/tables/${t6.id}/bill-out`, pos, 'POST')).status, 409, 'an unpaid table cannot just be freed');
+    const billOrders = (await call(`/api/tables/${t6.id}/bill`, pos)).body.orders;
+    assert.deepEqual(billOrders.map((o) => o.id), [round1.body.id, round2.body.id]);
+    const senior = { kind: 'group', label: 'Senior', diners: 4, pwd: 0, senior: 1, pwd_rate: 2000, senior_rate: 2000, vat_exempt: true, ids: [{ type: 'Senior', id: 'OSCA-77' }], reason: 'Group share: 1 senior of 4' };
+    const expected = tableBill(billOrders, senior, menu.taxRate);
+    assert.equal((await call(`/api/tables/${t6.id}/pay`, pos, 'POST', { billId: 'bill-1', discount: senior, cashTenderedCents: expected.total_cents, totalCents: expected.total_cents + 1 })).status, 409, 'a bill that changed is checked again');
+    assert.equal((await call(`/api/tables/${t6.id}/pay`, pos, 'POST', { billId: 'bill-1', discount: senior, cashTenderedCents: expected.total_cents - 1 })).status, 400);
+    const paid = await call(`/api/tables/${t6.id}/pay`, pos, 'POST', { billId: 'bill-1', discount: senior, cashTenderedCents: 1_000_000, totalCents: expected.total_cents });
+    assert.equal(paid.status, 200, JSON.stringify(paid.body));
+    assert.deepEqual([paid.body.total_cents, paid.body.discount_cents, paid.body.change_cents, paid.body.items.length, paid.body.labels.length], [expected.total_cents, expected.discount_cents, 1_000_000 - expected.total_cents, 2, 2]);
+    assert.ok(expected.discount_cents > 0);
+    assert.deepEqual((await call(`/api/tables/${t6.id}/pay`, pos, 'POST', { billId: 'bill-1', discount: senior, cashTenderedCents: 1_000_000 })).body.total_cents, expected.total_cents, 'a retried payment is not taken twice');
+    assert.equal((await call('/api/tables', pos)).body.find((t) => t.id === t6.id).party, null, 'paying frees the table');
+    assert.equal((await call('/api/admin/day', owner)).body.summary.gross_cents, salesBefore + expected.total_cents);
+    assert.equal((await call(`/api/bills/bill-1`, pos)).body.total_cents, expected.total_cents);
     assert.equal((await call(`/api/admin/tables/${t5.id}`, owner, 'PATCH', { name: 'Window', x: 500, y: 500 })).body.name, 'Window');
 
     // The owner changes their own password from the dashboard; the old one stops working.

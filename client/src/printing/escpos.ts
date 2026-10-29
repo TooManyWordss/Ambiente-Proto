@@ -8,10 +8,10 @@ export type PrintMethod = 'system' | 'rawbt' | 'usb' | 'ble';
 export type ReceiptLine = { name?: string; qty: number; unit_price_cents?: number; note?: string | null };
 export type ReceiptData = {
   label: string; station?: string; created_at?: string; items?: ReceiptLine[];
-  subtotal_cents?: number; discount_cents?: number; discount_label?: string | null; tax_cents?: number; total_cents?: number;
+  subtotal_cents?: number; discount_cents?: number; discount_label?: string | null; discount_lines?: { label: string; cents: number }[]; discount_ids?: string[]; tax_cents?: number; total_cents?: number;
   cash_tendered_cents?: number | null; change_cents?: number | null;
   table_name?: string | null; guests?: number | null; staff_name?: string | null;
-  offline?: boolean; reprint?: boolean; test?: boolean;
+  offline?: boolean; reprint?: boolean; test?: boolean; heading?: string;
   // A kitchen slip for an order that changed after it was sent: "ORDER CHANGED", "CANCELLED".
   banner?: string;
 };
@@ -82,6 +82,8 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   if (r.test) p.align('center').line('Test receipt').line('The printer is working').align('left');
   if (r.offline) p.line('Saved offline - number given when sent');
   if (r.reprint) p.bold(true).line('*** REPRINT ***').bold(false);
+  // A table's bill printed before they pay says so.
+  if (r.heading) p.bold(true).line(r.heading).bold(false);
   if (r.station === 'barista' && r.label) p.align('center').bold(true).size(true, true).line(`Order ${r.label}`).size(false, false).bold(false).align('left').line(clock(r.created_at));
   else if (!r.test && r.label) p.bold(true).row(`Receipt #${r.label}`, clock(r.created_at)).bold(false);
   else p.line(clock(r.created_at));
@@ -97,7 +99,9 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   });
   p.rule();
   if (r.tax_cents || r.discount_cents) p.row('Subtotal', peso(r.subtotal_cents));
-  if (r.discount_cents) p.row(`Discount${r.discount_label ? ` (${r.discount_label})` : ''}`, `-${peso(r.discount_cents)}`);
+  // A senior/PWD discount itemises the VAT exemption and each discount, then lists the IDs shown.
+  if (r.discount_cents && r.discount_lines?.length) { for (const l of r.discount_lines) p.row(l.label, `-${peso(l.cents)}`); for (const id of r.discount_ids ?? []) p.line(`  ${id}`); }
+  else if (r.discount_cents) p.row(`Discount${r.discount_label ? ` (${r.discount_label})` : ''}`, `-${peso(r.discount_cents)}`);
   if (r.tax_cents) p.row('Tax', peso(r.tax_cents));
   // Double-width text fits half as many characters.
   p.bold(true).size(true, false).row('TOTAL', peso(r.total_cents), half).size(false, false).bold(false);

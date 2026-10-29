@@ -31,7 +31,7 @@ const group = (key, title, label, units, ready) => ready.length && ({
 export function readyForPickup(station) {
   const since = new Date(Date.now() - PICKUP_WINDOW_MS).toISOString();
   const recent = db.prepare(`SELECT DISTINCT o.* FROM orders o JOIN order_items i ON i.order_id = o.id
-    WHERE o.status = 'paid' AND o.station = ? AND i.sends_to_kitchen = 1 AND i.kitchen_ready_at >= ?`).all(station, since);
+    WHERE o.status IN ('paid', 'open') AND o.station = ? AND i.sends_to_kitchen = 1 AND i.kitchen_ready_at >= ?`).all(station, since);
   const orders = attachItems(recent).map((o) => {
     const kitchen = o.items.filter((i) => i.sends_to_kitchen && i.qty > 0);
     const ready = kitchen.filter((i) => i.kitchen_ready_at >= since)
@@ -59,7 +59,7 @@ export const announcePickup = () => storeBroadcast(['pos', 'barista']).emit('pic
 app.get('/api/kitchen/tickets', (req, res) => {
   const [from] = dayRange();
   const open = db
-    .prepare("SELECT * FROM orders WHERE kitchen_status IN ('new', 'preparing') AND status = 'paid' AND created_at >= ? ORDER BY id")
+    .prepare("SELECT * FROM orders WHERE kitchen_status IN ('new', 'preparing') AND status IN ('paid', 'open') AND created_at >= ? ORDER BY id")
     .all(from);
   res.json(attachItems(open));
 });
@@ -97,7 +97,7 @@ app.patch('/api/orders/:id/kitchen', requireRole('kitchen'), (req, res) => {
 app.patch('/api/orders/:id/items/:itemId/kitchen', requireRole('kitchen'), (req, res) => {
   const state = typeof req.body?.ready === 'boolean' ? (req.body.ready ? 'ready' : 'waiting') : req.body?.state;
   if (!['waiting', 'cooking', 'ready'].includes(state)) return res.status(400).json({ error: 'state must be waiting, cooking or ready' });
-  const order = db.prepare("SELECT * FROM orders WHERE id = ? AND status = 'paid'").get(Number(req.params.id));
+  const order = db.prepare("SELECT * FROM orders WHERE id = ? AND status IN ('paid', 'open')").get(Number(req.params.id));
   if (!order || !['new', 'preparing'].includes(order.kitchen_status)) return res.status(409).json({ error: 'This ticket is no longer open' });
   const item = db.prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ? AND sends_to_kitchen = 1').get(Number(req.params.itemId), order.id);
   if (!item) return res.status(404).json({ error: 'Item not found on this ticket' });

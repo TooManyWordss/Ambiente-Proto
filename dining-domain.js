@@ -20,22 +20,80 @@ export function timestamp(value) {
   return new Date(value).toISOString();
 }
 export const linesOf = (visit) => visit.submissions.flatMap(s => s.lines);
+
+// Philippine senior citizen (RA 9994) and PWD (RA 10754) discounts, by the group-share rule: when a group
+// shares the bill, each senior or PWD with an ID gets the discount on their equal share of it
+// (bill ÷ diners × how many of them). With `vat_exempt`, their share is first made VAT-exempt: prices
+// include 12% VAT, so it is divided by 1.12 before the rate comes off. Rates are basis points (2000 = 20%).
+export const VAT_RATE = 0.12;
+export const GROUP_LABELS = ['PWD', 'Senior', 'PWD & Senior'];
+export function groupShare(subtotal_cents, d, taxRate = 0) {
+  if (!GROUP_LABELS.includes(d.label)) fail('Choose PWD, Senior, or PWD & Senior');
+  const diners = integer(d.diners, 'number of diners', 1, 999);
+  const pwd = d.label === 'Senior' ? 0 : integer(d.pwd, 'number of PWDs', 1, 999);
+  const senior = d.label === 'PWD' ? 0 : integer(d.senior, 'number of seniors', 1, 999);
+  if (d.label === 'PWD' && d.senior) fail('A PWD discount has no seniors: choose PWD & Senior');
+  if (d.label === 'Senior' && d.pwd) fail('A senior discount has no PWDs: choose PWD & Senior');
+  if (pwd + senior > diners) fail('There are more seniors and PWDs than diners');
+  if (typeof d.vat_exempt !== 'boolean') fail('Choose whether their share is VAT-exempt');
+  // Each senior and PWD shows an ID; its number goes on the receipt.
+  if (!Array.isArray(d.ids) || d.ids.filter(i => i?.type === 'PWD').length !== pwd || d.ids.filter(i => i?.type === 'Senior').length !== senior || d.ids.length !== pwd + senior) fail('Enter the ID number of each senior and PWD');
+  d.ids.forEach(i => text(i.id, `${i.type} ID number`, 40));
+  // Prices already include VAT unless the store adds tax on top; then their share is simply left out of the tax.
+  const removeVat = d.vat_exempt && !taxRate;
+  const parts = [['PWD', pwd, d.pwd_rate], ['Senior', senior, d.senior_rate]].filter(([, n]) => n).map(([who, count, rate]) => {
+    const share = Math.round(subtotal_cents * count / diners), base = removeVat ? Math.round(share / (1 + VAT_RATE)) : share;
+    return { who, count, rate: integer(rate, `${who} discount rate`, 0, 10000), share, vat: share - base, discount: Math.round(base * rate / 10000) };
+  });
+  const sum = key => parts.reduce((n, p) => n + p[key], 0);
+  return { diners, parts, share_cents: sum('share'), vat_cents: sum('vat'), discount_cents: sum('vat') + sum('discount') };
+}
+// The discount as receipt lines: the VAT exemption and each group's discount, or the one manual discount.
+export function discountLines(subtotal_cents, discount, taxRate = 0) {
+  if (!discount) return [];
+  if (discount.kind !== 'group') return [{ label: `Discount${discount.label ? ` (${discount.label})` : ''}`, cents: totals({ discount, submissions: [{ lines: [{ qty: 1, unit_price_cents: subtotal_cents }] }] }, taxRate).discount_cents }];
+  const g = groupShare(subtotal_cents, discount, taxRate);
+  return [...(g.vat_cents ? [{ label: `VAT exempt (${g.parts.map(p => `${p.count} ${p.who}`).join(', ')} of ${g.diners})`, cents: g.vat_cents }] : []),
+    ...g.parts.map(p => ({ label: `${p.who} ${p.rate / 100}% (${p.count} of ${g.diners})`, cents: p.discount }))];
+}
+
 export function totals(visit, taxRate = 0) {
   const subtotal_cents = linesOf(visit).reduce((sum, line) => sum + line.qty * line.unit_price_cents, 0);
   integer(subtotal_cents, 'subtotal');
   const discount = visit.discount;
-  let discount_cents = 0;
+  let discount_cents = 0, taxable = null;
   if (discount) {
     text(discount.reason, 'discount reason');
-    if (!['', 'PWD', 'Senior'].includes(discount.label)) fail('Invalid discount label');
-    if (discount.kind === 'percent') discount_cents = Math.round(subtotal_cents * integer(discount.value, 'discount basis points', 0, 10000) / 10000);
-    else if (discount.kind === 'fixed') discount_cents = integer(discount.value, 'discount amount', 0, subtotal_cents);
-    else fail('Choose a percentage or fixed discount');
+    if (discount.kind === 'group') {
+      const g = groupShare(subtotal_cents, discount, taxRate);
+      discount_cents = g.discount_cents;
+      // Tax added on top isn't charged on a VAT-exempt share.
+      if (discount.vat_exempt) taxable = subtotal_cents - g.share_cents;
+    } else {
+      if (!['', 'PWD', 'Senior'].includes(discount.label)) fail('Invalid discount label');
+      if (discount.kind === 'percent') discount_cents = Math.round(subtotal_cents * integer(discount.value, 'discount basis points', 0, 10000) / 10000);
+      else if (discount.kind === 'fixed') discount_cents = integer(discount.value, 'discount amount', 0, subtotal_cents);
+      else fail('Choose a percentage or fixed discount');
+    }
   }
-  const tax_cents = Math.round((subtotal_cents - discount_cents) * taxRate);
+  const tax_cents = Math.round((taxable ?? subtotal_cents - discount_cents) * taxRate);
   const total_cents = subtotal_cents - discount_cents + tax_cents;
   integer(total_cents, 'total');
   return { subtotal_cents, discount_cents, tax_cents, total_cents };
+}
+// One bill for a table's orders, paid together at bill out. The discount and tax are worked out on the
+// whole bill, then shared across its orders by their subtotals, so the orders' own numbers add up to it.
+// A fixed discount is kept on each order as its part of the amount; other discounts apply to each as they are.
+export function tableBill(orders, discount, taxRate = 0) {
+  const bill = totals({ discount, submissions: orders.map(o => ({ lines: o.items })) }, taxRate);
+  let discountLeft = bill.discount_cents, taxLeft = bill.tax_cents;
+  const share = (cents, subtotal) => bill.subtotal_cents ? Math.round(cents * subtotal / bill.subtotal_cents) : 0;
+  return { ...bill, orders: orders.map((o, i) => {
+    const subtotal_cents = o.items.reduce((sum, line) => sum + line.qty * line.unit_price_cents, 0), last = i === orders.length - 1;
+    const discount_cents = last ? discountLeft : share(bill.discount_cents, subtotal_cents), tax_cents = last ? taxLeft : share(bill.tax_cents, subtotal_cents);
+    discountLeft -= discount_cents; taxLeft -= tax_cents;
+    return { id: o.id, subtotal_cents, discount_cents, tax_cents, total_cents: subtotal_cents - discount_cents + tax_cents, discount: discount?.kind === 'fixed' ? { ...discount, value: discount_cents } : discount };
+  }) };
 }
 export function ticketState(submission) {
   if (submission.cancelled_at) return 'cancelled';
@@ -69,7 +127,7 @@ export function applyDining(input, operation, context) {
     allowed(role, ['kitchen']);
     const order = state.counterOrders?.[targetId];
     version(order, expectedVersion);
-    if (order.status !== 'paid' || order.visit_id || !['new', 'preparing', 'ready'].includes(order.kitchen_status)) fail('This ticket is no longer active', 409);
+    if (!['paid', 'open'].includes(order.status) || order.visit_id || !['new', 'preparing', 'ready'].includes(order.kitchen_status)) fail('This ticket is no longer active', 409);
     if (p.lineId != null) {
       const line = order.items.find(l => l.id === p.lineId && l.sends_to_kitchen);
       if (!line) fail('Kitchen line not found', 404);

@@ -99,7 +99,9 @@ addMissingColumns('menu_items', {
   sizes: 'TEXT', // weight bands of a weighed item, e.g. "S<60,M<100,L"
 });
 addMissingColumns('orders', {
-  status: "TEXT NOT NULL DEFAULT 'paid'", // paid | voided
+  status: "TEXT NOT NULL DEFAULT 'paid'", // paid | open (a table's order, paid at bill out) | voided
+  bill_id: 'TEXT', // orders paid together at a table's bill out share one
+  paid_at: 'TEXT', // when a table's order was paid (others are paid as they're rung up)
   cash_tendered_cents: 'INTEGER',
   change_cents: 'INTEGER',
   void_reason: 'TEXT',

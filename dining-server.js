@@ -41,7 +41,7 @@ export function initDiningSchema(db) {
 
 export function registerDining({ app, db, requireRole, currentStore, broadcast, taxRate, loadOrder, logActivity, announceStock, applyRecipes, extraMetricsVisits = () => [], receiptConfig }) {
   const onlyAmbiente = (req, res, next) => currentStore() === 'ambiente' ? next() : res.status(404).json({ error: 'Table service is available at Café Ambiente' });
-  const readState = () => ({ ...Object.fromEntries(['tables', 'visits'].map(kind => [kind, Object.fromEntries(db.prepare(`SELECT id, document FROM dining_${kind}`).all().map(r => [r.id, JSON.parse(r.document)]))])), counterOrders: Object.fromEntries(db.prepare("SELECT id FROM orders WHERE visit_id IS NULL AND status = 'paid' AND (kitchen_status IN ('new', 'preparing') OR created_at >= ?)").all(new Date(Date.now() - 2 * 86400000).toISOString()).map(r => [String(r.id), loadOrder(r.id)])) });
+  const readState = () => ({ ...Object.fromEntries(['tables', 'visits'].map(kind => [kind, Object.fromEntries(db.prepare(`SELECT id, document FROM dining_${kind}`).all().map(r => [r.id, JSON.parse(r.document)]))])), counterOrders: Object.fromEntries(db.prepare("SELECT id FROM orders WHERE visit_id IS NULL AND status IN ('paid', 'open') AND (kitchen_status IN ('new', 'preparing') OR created_at >= ?)").all(new Date(Date.now() - 2 * 86400000).toISOString()).map(r => [String(r.id), loadOrder(r.id)])) });
   const writeState = (state, before) => {
     for (const kind of ['tables', 'visits']) {
       // Tombstones preserve table/visit identities when creations are reversed.
