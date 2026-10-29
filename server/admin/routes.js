@@ -6,11 +6,19 @@ import { getSetting, setSetting } from '../core/settings.js';
 import { dayReport, logActivity } from '../sales/orders.js';
 import { app, screenCounts, storeBroadcast } from '../core/http.js';
 import { menuItemProblem } from '../menu/routes.js';
+import { tableHeat } from '../tables/metrics.js';
 
 // ---------- Admin: every day ----------
 
 // Which screens are open right now, for the owner's live panel.
 app.get('/api/admin/screens', (req, res) => res.json(screenCounts()));
+
+// Which tables get sat at most, for the table heatmap. ?days=1 (today), 7, 30 or 90.
+app.get('/api/admin/table-heat', (req, res) => {
+  const days = Number(req.query.days ?? 30);
+  if (![1, 7, 30, 90].includes(days)) return res.status(400).json({ error: 'days must be 1, 7, 30 or 90' });
+  res.json(tableHeat(days));
+});
 
 // One day's sales, receipts and activity log. Defaults to today.
 app.get('/api/admin/day', (req, res) => {

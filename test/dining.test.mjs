@@ -61,6 +61,9 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       assert.equal(v.submissions[0].lines[0].changes[0].previous_qty, 3);
       await act('kitchen.ready', visit, { submissionId: submission }, kitchen);
       assert.equal(ticketState((await snapshot()).visits[visit].submissions[0]), 'ready');
+      // A tab opened at a table that isn't on the floor map is still counted by the table heatmap, listed apart.
+      const heat = (await request('/api/admin/table-heat?days=7', owner)).data;
+      assert.deepEqual(heat.others.map(u => [u.name, u.seatings, u.guests]), [['Garden', 1, 3]]);
       // The till lists the finished table order as ready to collect.
       const pickups = (await request('/api/pos/ready', pos)).data;
       assert.deepEqual(pickups.map(p => [p.key, p.title, p.items]), [[`table:${submission}`, 'Garden', [{ name: item.name, qty: 2 }]]]);

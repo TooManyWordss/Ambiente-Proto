@@ -135,9 +135,11 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     await call(`/api/menu/${other.id}/availability`, pos, 'POST', { available: false });
     await heard; mirror.close();
     await call(`/api/menu/${other.id}/availability`, pos, 'POST', { available: true });
-    const terminal = (cookie) => fetch(`${base}/terminal`, { headers: cookie ? { cookie } : {}, redirect: 'manual' });
-    assert.equal((await terminal(owner)).status, 200);
-    assert.equal((await terminal(pos)).headers.get('location'), '/login?role=admin&next=terminal');
+    // The panel picker is open to anyone (each panel asks for its own PIN); the side-by-side view is the owner's.
+    const terminal = (path, cookie) => fetch(`${base}${path}`, { headers: cookie ? { cookie } : {}, redirect: 'manual' });
+    assert.equal((await terminal('/terminal')).status, 200);
+    assert.equal((await terminal('/terminal/all', owner)).status, 200);
+    assert.equal((await terminal('/terminal/all', pos)).headers.get('location'), '/login?role=admin&next=terminal');
 
     // Tables: the sketch's layout is there, a party is seated, adds a second order, then bills out.
     const tables = (await call('/api/tables', pos)).body;
@@ -160,6 +162,14 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     assert.equal((await call('/api/tables', pos)).body.find((t) => t.id === t5.id).party, null);
     const billed = (await call('/api/admin/day', owner)).body.orders.find((o) => o.id === dineIn.body.id);
     assert.ok(billed.billed_out_at);
+    // The table heatmap counts the party once (two receipts, one seating), with its guests and how long it stayed.
+    const heat = (await call('/api/admin/table-heat?days=7', owner)).body;
+    const used = heat.tables.find((t) => t.id === t5.id);
+    assert.deepEqual([used.seatings, used.guests, used.timed], [1, 3, 1]);
+    assert.ok(used.minutes >= 9 && used.minutes <= 12, `stayed ${used.minutes} min`);
+    assert.ok(heat.tables.every((t) => t.id === t5.id || t.seatings === 0));
+    assert.equal((await call('/api/admin/table-heat?days=5', owner)).status, 400);
+    assert.equal((await call('/api/admin/table-heat', pos)).status, 401);
     assert.equal((await call(`/api/admin/tables/${t5.id}`, owner, 'PATCH', { name: 'Window', x: 500, y: 500 })).body.name, 'Window');
 
     // The owner changes their own password from the dashboard; the old one stops working.

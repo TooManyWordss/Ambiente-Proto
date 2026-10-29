@@ -43,8 +43,11 @@ for (const [role, page] of Object.entries(PAGE)) {
   });
 }
 
-// The owner's general terminal: every screen side by side on one page.
-app.get('/terminal', (req, res) => {
+// The general terminal: a panel picker anyone can open. Each panel still asks for its own PIN or password.
+app.get('/terminal', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+
+// The owner's view of every screen side by side on one page.
+app.get('/terminal/all', (req, res) => {
   if (readSession(req.headers.cookie)?.role !== 'admin') return res.redirect(storePath(req, '/login?role=admin&next=terminal'));
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
