@@ -13,10 +13,14 @@ export function RestartNeeded() {
   return needed ? <div className="restart-banner" role="alert"><span><strong>Finish the update:</strong> restart the café server. In Termux press Ctrl + C twice, then type <code>cafe</code>.</span><button type="button" aria-label="Hide until the next check" onClick={() => setNeeded(false)}>×</button></div> : null;
 }
 export function Toast({ text }: { text: string }) { return text ? <div className="toast" role="status">{text}</div> : null; }
-export function Logo({ large = false, mark = false }: { large?: boolean; mark?: boolean }) { return <span className={`logo${large ? ' large' : ''}${mark ? ' mark' : ''}`} aria-label={STORE_NAME} role="img" />; }
+// With `home`, the logo is a link to the main page (target _top, so it works inside the owner's all-screens view too).
+export function Logo({ large = false, mark = false, home = false }: { large?: boolean; mark?: boolean; home?: boolean }) {
+  const logo = <span className={`logo${large ? ' large' : ''}${mark ? ' mark' : ''}`} aria-label={STORE_NAME} role="img" />;
+  return home ? <a className="logo-home" href="/" target="_top" title="Main page" aria-label={`${STORE_NAME} main page`}>{logo}</a> : logo;
+}
 export function Connection({ state, kitchen = false }: { state: string; kitchen?: boolean }) { return <><span className={`badge ${state === 'Live' ? 'live' : state === 'Offline' ? 'offline' : ''}`}>{kitchen || state !== 'Live' ? state === 'Offline' ? 'Offline · reconnecting…' : state : ''}</span>{kitchen && state === 'Offline' && <div className="offline-banner">Connection lost — new orders will not appear until it’s back</div>}</>; }
 export function TopBar({ title, subtitle, state, user, onLogout = logout, children, showLogout = true }: { title?: string; subtitle?: string; state: string; user?: User | null; onLogout?: () => void; children?: React.ReactNode; showLogout?: boolean }) {
-  return <header className="topbar photo"><div className="brand"><Logo mark /><div><div className="brand-name">{title ?? STORE_NAME}</div><div className="brand-sub">{subtitle}{user?.name ? ` · ${user.name}` : ''}</div></div></div><div className="topbar-right">{children}<Connection state={state} />{showLogout&&<button className="btn ghost small" onClick={onLogout}>{user?.name ? 'Switch' : 'Log out'}</button>}</div></header>;
+  return <header className="topbar photo"><div className="brand"><Logo mark home /><div><div className="brand-name">{title ?? STORE_NAME}</div><div className="brand-sub">{subtitle}{user?.name ? ` · ${user.name}` : ''}</div></div></div><div className="topbar-right">{children}<Connection state={state} />{showLogout&&<button className="btn ghost small" onClick={onLogout}>{user?.name ? 'Switch' : 'Log out'}</button>}</div></header>;
 }
 export function Metric({ label, value, note }: { label: string; value: React.ReactNode; note?: string }) { return <div className="tile"><div className="label">{label}</div><div className="value">{value}</div>{note && <div className="delta">{note}</div>}</div>; }
 export function Panel({ title, children, className = '' }: { title: React.ReactNode; children: React.ReactNode; className?: string }) { return <section className={`panel ${className}`}><h2>{title}</h2>{children}</section>; }

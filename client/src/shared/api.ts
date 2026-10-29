@@ -15,8 +15,4 @@ export async function api<T = any>(url: string, options: { method?: string; body
 }
 export function roleFromPath(): Role { const p = screenPath().slice(1); return (['pos', 'barista', 'kitchen', 'inventory', 'admin'].includes(p) ? p : 'admin') as Role; }
 export function clearCachedSessions() { for (const role of ['pos', 'barista', 'kitchen', 'inventory', 'admin']) localStorage.removeItem(storageKey(`session.${role}`)); }
-// A tab opened from the general terminal goes back to its panel picker when you sign out, so the next person picks their own panel.
-const TERMINAL_KEY = () => storageKey('viaTerminal');
-export function markViaTerminal() { try { sessionStorage.setItem(TERMINAL_KEY(), '1'); } catch { /* storage blocked: sign-out goes to the panel's own login */ } }
-export function viaTerminal() { try { return sessionStorage.getItem(TERMINAL_KEY()) === '1'; } catch { return false; } }
-export async function logout() { await fetch(storeUrl('/api/logout'), { method: 'POST', credentials: 'same-origin' }).catch(() => {}); clearCachedSessions(); location.href = storeUrl(viaTerminal() ? '/terminal' : `/login?role=${roleFromPath()}`); }
+export async function logout() { await fetch(storeUrl('/api/logout'), { method: 'POST', credentials: 'same-origin' }).catch(() => {}); clearCachedSessions(); location.href = storeUrl(`/login?role=${roleFromPath()}`); }

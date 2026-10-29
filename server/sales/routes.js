@@ -1,5 +1,5 @@
 import { currentStore } from '../core/config.js';
-import { totals as diningTotals } from '../../dining-domain.js';
+import { prepStation, totals as diningTotals } from '../../dining-domain.js';
 import { TAX_RATE } from '../core/config.js';
 import { receiptLabel, requireRole, SELLERS, stationOf } from '../auth/sessions.js';
 import { dayRange, localDate, money } from '../core/dates.js';
@@ -65,7 +65,7 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
     if (note === null) return res.status(400).json({ error: `The note on ${menuItem.name} is too long (${NOTE_MAX} characters at most)` });
     const sold = sellAs(menuItem, grams);
     if (typeof sold === 'string') return res.status(400).json({ error: sold });
-    lines.push({ menuItem, qty, note, ...sold });
+    lines.push({ menuItem, qty, note, station: prepStation(menuItem), ...sold });
   }
 
   let bill;
@@ -80,7 +80,7 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
     if (cashTenderedCents < total) return res.status(400).json({ error: 'Cash received is less than the total' });
     tendered = cashTenderedCents;
   }
-  const kitchenStatus = lines.some((l) => l.menuItem.sends_to_kitchen) ? 'new' : 'none';
+  const kitchenStatus = lines.some((l) => l.station) ? 'new' : 'none';
 
   // Dine-in: which table, how many, and when they sat down. No table = takeout / counter.
   let table = null, guests = null, customerTag = null, seatedAt = null;
@@ -119,11 +119,11 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
         .lastInsertRowid
     );
     const insertItem = db.prepare(
-      `INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, note, grams)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, note, grams, station)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    for (const { menuItem, qty, note, name, unit_price_cents, grams } of lines) {
-      insertItem.run(orderId, menuItem.id, name, unit_price_cents, qty, menuItem.sends_to_kitchen, note, grams);
+    for (const { menuItem, qty, note, name, unit_price_cents, grams, station } of lines) {
+      insertItem.run(orderId, menuItem.id, name, unit_price_cents, qty, station ? 1 : 0, note, grams, station);
     }
     const sold = new Map();
     for (const { menuItem, qty } of lines) sold.set(menuItem.id, (sold.get(menuItem.id) ?? 0) + qty);
@@ -202,7 +202,8 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
     if (menuItem.unavailable_since) return res.status(400).json({ error: `${menuItem.name} is marked unavailable` });
     const sold = sellAs(menuItem, grams);
     if (typeof sold === 'string') return res.status(400).json({ error: sold });
-    lines.push({ key: id, menu_item_id: menuItemId, sends_to_kitchen: menuItem.sends_to_kitchen, qty, note: notes.get(id) ?? '', ...sold });
+    const station = prepStation(menuItem);
+    lines.push({ key: id, menu_item_id: menuItemId, sends_to_kitchen: station ? 1 : 0, station, qty, note: notes.get(id) ?? '', ...sold });
   }
 
   // "+1 Fries, −1 Iced Tea" for the activity log.
@@ -261,10 +262,10 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
   try {
     const retained = new Set(lines.filter(l => l.id).map(l => l.id));
     for (const old of order.items) if (!retained.has(old.id)) db.prepare('DELETE FROM order_items WHERE id = ?').run(old.id);
-    const insertItem = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at, grams) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insertItem = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at, grams, station) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const l of lines) {
       if (l.id) db.prepare('UPDATE order_items SET qty = ?, ready_qty = ?, note = ?, kitchen_ready_at = ?, kitchen_started_at = ? WHERE id = ?').run(l.qty, l.ready_qty, l.note ?? '', l.kitchen_ready_at, l.kitchen_started_at, l.id);
-      else insertItem.run(order.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, 0, l.note, l.kitchen_ready_at, l.kitchen_started_at, l.grams);
+      else insertItem.run(order.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, 0, l.note, l.kitchen_ready_at, l.kitchen_started_at, l.grams, l.station);
     }
     const now = new Date().toISOString();
     db.prepare(

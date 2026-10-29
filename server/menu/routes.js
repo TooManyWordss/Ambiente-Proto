@@ -15,7 +15,7 @@ export const catalogDetails = new Map(menuCatalog.map(item => [`${item.category}
 app.get('/api/menu', (req, res) => {
   const items = db
     .prepare(
-      `SELECT id, name, category, price_cents, per_grams, sizes, unavailable_since IS NULL AS available FROM menu_items
+      `SELECT id, name, category, price_cents, sends_to_kitchen, per_grams, sizes, unavailable_since IS NULL AS available FROM menu_items
         WHERE active = 1 AND status = 'approved' ORDER BY id`
     )
     .all();

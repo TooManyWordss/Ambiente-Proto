@@ -4,7 +4,7 @@ import { chime } from '../shared/sound';
 import { storageKey } from '../shared/store';
 
 // One order (or table ticket) with the pieces the kitchen has finished. Each piece has its own key.
-type Pickup = { key: string; title: string; label: string | null; items: { name: string; qty: number; note: string | null; keys: string[] }[]; ready_at: string; ready: number; total: number; complete: boolean };
+type Pickup = { key: string; title: string; label: string | null; items: { name: string; qty: number; note: string | null; from?: string; keys: string[] }[]; ready_at: string; ready: number; total: number; complete: boolean };
 
 const ago = (iso: string, now: number) => { const m = Math.max(0, Math.floor((now - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : `${m} min ago`; };
 const readKeys = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(key) ?? '[]'); } catch { return []; } };
@@ -53,7 +53,7 @@ export function ReadyAlerts({ station }: { station: 'cashier' | 'barista' }) {
       <div className="pickup-body">
         <span className="pickup-kicker">{p.complete ? (p.collected ? 'Rest of the order ready' : 'Whole order ready') : `Ready: ${p.ready} of ${p.total} items`} · {ago(p.ready_at, now)}</span>
         <strong className="pickup-title">{p.title}{p.label && <span> · #{p.label}</span>}</strong>
-        <span className="pickup-items">{p.items.map((i) => `${i.keys.length} × ${i.name}${i.note ? ` (${i.note})` : ''}`).join(' · ')}</span>
+        <span className="pickup-items">{p.items.map((i) => `${i.keys.length} × ${i.name}${i.note ? ` (${i.note})` : ''}${i.from === 'barista' ? ' · from the barista' : ''}`).join(' · ')}</span>
         {!p.complete && <span className="pickup-wait">The rest is still cooking</span>}
       </div>
       <button className="btn primary" onClick={() => setDone((d) => [...d, ...p.items.flatMap((i) => i.keys)])}>Picked up</button>

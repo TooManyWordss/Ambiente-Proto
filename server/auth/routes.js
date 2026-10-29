@@ -43,8 +43,8 @@ for (const [role, page] of Object.entries(PAGE)) {
   });
 }
 
-// The general terminal: a panel picker anyone can open. Each panel still asks for its own PIN or password.
-app.get('/terminal', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+// The general terminal (a panel picker) was removed: old bookmarks land on the main page.
+app.get('/terminal', (req, res) => res.redirect(storePath(req, '/')));
 
 // The owner's view of every screen side by side on one page.
 app.get('/terminal/all', (req, res) => {
@@ -84,7 +84,7 @@ app.post('/api/logout', (req, res) => {
 
 app.use('/api/menu', requireRole(...SELLERS));
 app.use('/api/pos', requireRole(...SELLERS));
-app.use('/api/kitchen', requireRole('kitchen'));
+app.use('/api/kitchen', requireRole('kitchen', 'barista'));
 app.use('/api/inventory', requireRole(...STOCK_KEEPERS));
 app.use('/api/admin', requireRole('admin'));
 

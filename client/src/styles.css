@@ -474,18 +474,7 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .fm-table.heatmap.selected .fm-top{stroke:var(--text);stroke-width:4;stroke-dasharray:none}
 @media (max-width:760px){.th-key-note{margin-left:0;flex-basis:100%}}
 
-/* General terminal panel picker: the login look, with a card listing every panel. */
-.picker{place-items:center}
-.picker-card{width:min(600px,100%);gap:18px}
-.picker-title{text-align:center}.picker-title h1{margin:0}.picker-title p{margin:4px 0 0;color:var(--muted)}
-.picker-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.picker-panel{position:relative;display:grid;gap:3px;min-height:76px;padding:14px 34px 14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);color:var(--text);text-decoration:none}
-.picker-panel strong{font-family:var(--display);font-size:1.1rem}.picker-panel span{color:var(--muted);font-size:.86rem;line-height:1.3}
-.picker-panel i{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-style:normal;font-size:1.5rem;color:var(--accent)}
-.picker-panel:hover{border-color:var(--accent)}.picker-panel:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-.picker-panel.picker-admin{grid-column:1/-1}
-.picker-all,.login-back{justify-self:center;text-align:center}
-@media(max-width:520px){.picker-panels{grid-template-columns:minmax(0,1fr)}}
+.logo-home{display:inline-flex;border-radius:8px}.logo-home:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 
 /* Kitchen printer: a banner when tickets are waiting to print or the printer needs connecting. */
 .kp-banner{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:10px 16px 0;padding:12px 14px;border:2px solid var(--warn);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);font-weight:700}

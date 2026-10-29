@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { io as connect } from 'socket.io-client';
 import { fileURLToPath } from 'node:url';
-import { tableBill } from '../dining-domain.js';
+import { prepStation, tableBill } from '../dining-domain.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -24,7 +24,7 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
   const port = await freePort();
   const child = spawn(process.execPath, ['server.js'], {
     cwd: root,
-    env: { ...process.env, DATA_DIR: dir, PORT: String(port), POS_PIN: '1234', KITCHEN_PIN: '4321', INVENTORY_PIN: '5555',
+    env: { ...process.env, DATA_DIR: dir, PORT: String(port), POS_PIN: '1234', KITCHEN_PIN: '4321', INVENTORY_PIN: '5555', BARISTA_PIN: '7777',
       ADMIN_PASSWORD: 'owner-password', SESSION_SECRET: 'recipes-test-secret' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -52,10 +52,11 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     const owner = await login('admin', 'owner-password');
     const pos = await login('pos', '1234');
     const kitchen = await login('kitchen', '4321');
+    const barista = await login('barista', '7777');
 
     const { body: menu } = await call('/api/menu', pos);
     const bar = ['Sparkling Wine', 'White Wine', 'Red Wine', 'Dessert Wine', 'Whiskey', 'Beer'];
-    const [corn, other] = menu.items.filter((i) => i.available && !bar.includes(i.category));
+    const [corn, other] = menu.items.filter((i) => i.available && prepStation(i) === 'kitchen');
     const { body: stock } = await call('/api/inventory/items', owner, 'POST', { name: 'Corn', unit: 'pcs', quantity: 5, threshold: 3 });
     const put = await call(`/api/admin/recipes/${corn.id}`, owner, 'PUT', { ingredients: [{ inventoryItemId: stock.id, qty: 1 }] });
     assert.equal(put.status, 200);
@@ -108,6 +109,27 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     assert.equal((await call(`/api/orders/${steaks.body.id}`, pos, 'PATCH', { items: [{ menuItemId: wagyu.id, qty: 1 }] })).status, 400);
     assert.equal((await call(`/api/orders/${steaks.body.id}/void`, pos, 'POST', { reason: 'test' })).status, 200);
 
+    // Food goes to the kitchen and drinks, coffee and desserts to the barista: each screen sees and finishes its own
+    // items, and the order is ready (and rings the till) only when both are done.
+    {
+      const coffee = menu.items.find((i) => i.category === 'Hot Coffee'), cake = menu.items.find((i) => i.category === 'Desserts / Cakes / Pastries'), wine = menu.items.find((i) => i.category === 'Red Wine');
+      const mixed = (await call('/api/orders', pos, 'POST', { clientId: 'mixed-1', items: [{ menuItemId: other.id, qty: 1 }, { menuItemId: coffee.id, qty: 2 }, { menuItemId: cake.id, qty: 1 }, { menuItemId: wine.id, qty: 1 }] })).body;
+      assert.deepEqual(mixed.items.map((i) => [i.name, i.station, i.sends_to_kitchen]), [[other.name, 'kitchen', 1], [coffee.name, 'barista', 1], [cake.name, 'barista', 1], [wine.name, 'barista', 1]]);
+      const onScreen = async (who) => (await call('/api/kitchen/tickets', who)).body.some((t) => t.id === mixed.id);
+      assert.deepEqual([await onScreen(kitchen), await onScreen(barista)], [true, true]);
+      const kitchenDone = await call(`/api/orders/${mixed.id}/kitchen`, kitchen, 'PATCH', { status: 'ready' });
+      assert.deepEqual([kitchenDone.body.kitchen_status, kitchenDone.body.items.filter((i) => i.kitchen_ready_at).map((i) => i.name)], ['preparing', [other.name]]);
+      assert.deepEqual([await onScreen(kitchen), await onScreen(barista)], [false, true]);
+      const drinkReady = (await call('/api/pos/ready', pos)).body.find((p) => p.key === `order:${mixed.id}`);
+      assert.deepEqual([drinkReady.complete, drinkReady.items.map((i) => i.from)], [false, ['kitchen']]);
+      const baristaDone = await call(`/api/orders/${mixed.id}/kitchen`, barista, 'PATCH', { status: 'ready' });
+      assert.equal(baristaDone.body.kitchen_status, 'ready');
+      assert.equal(await onScreen(barista), false);
+      const allReady = (await call('/api/pos/ready', pos)).body.find((p) => p.key === `order:${mixed.id}`);
+      assert.deepEqual([allReady.complete, allReady.items.map((i) => i.from).sort()], [true, ['barista', 'barista', 'barista', 'kitchen']]);
+      assert.equal((await call(`/api/orders/${mixed.id}/void`, pos, 'POST', { reason: 'test' })).status, 200);
+    }
+
     // Editing down to 1 puts 1 back; voiding puts the rest back.
     const edit = await call(`/api/orders/${sale.body.id}`, owner, 'PATCH', { items: [{ menuItemId: corn.id, qty: 1 }, { menuItemId: other.id, qty: 1 }] });
     assert.equal(edit.status, 200);
@@ -141,7 +163,7 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
       // The till already lists the finished item, as part of an order that's still cooking.
       const [part] = (await call('/api/pos/ready', pos)).body;
       assert.deepEqual([part.key, part.complete, part.ready, part.total], [`order:${order.id}`, false, 1, 3]);
-      assert.deepEqual(part.items, [{ name: first.name, qty: 1, note: null, keys: [`item:${keptItem.id}:1`] }]);
+      assert.deepEqual(part.items, [{ name: first.name, qty: 1, note: null, from: 'kitchen', keys: [`item:${keptItem.id}:1`] }]);
       // Finishing the last item tells the till, which shows the order as ready to collect.
       const till = connect(base, { extraHeaders: { cookie: pos }, auth: { store: 'ambiente' }, transports: ['websocket'] });
       await new Promise((resolve, reject) => { till.on('connect', resolve); till.on('connect_error', reject); });
@@ -181,7 +203,7 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     await call(`/api/menu/${other.id}/availability`, pos, 'POST', { available: true });
     // The panel picker is open to anyone (each panel asks for its own PIN); the side-by-side view is the owner's.
     const terminal = (path, cookie) => fetch(`${base}${path}`, { headers: cookie ? { cookie } : {}, redirect: 'manual' });
-    assert.equal((await terminal('/terminal')).status, 200);
+    assert.equal((await terminal('/terminal')).headers.get('location'), '/', 'the old general terminal goes to the main page');
     assert.equal((await terminal('/terminal/all', owner)).status, 200);
     assert.equal((await terminal('/terminal/all', pos)).headers.get('location'), '/login?role=admin&next=terminal');
 

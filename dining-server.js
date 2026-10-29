@@ -58,7 +58,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     db.prepare('UPDATE orders SET kitchen_status = ?, kitchen_started_at = ?, kitchen_ready_at = ?, version = ? WHERE id = ?').run(order.kitchen_status, order.kitchen_started_at, order.kitchen_ready_at, order.version, order.id);
     for (const line of order.items) db.prepare('UPDATE order_items SET ready_qty = ? WHERE id = ? AND order_id = ?').run(line.ready_qty, line.id, order.id);
   };
-  const announce = () => broadcast(['pos', 'kitchen', 'admin']).emit('dining.updated');
+  const announce = () => broadcast(['pos', 'kitchen', 'barista', 'admin']).emit('dining.updated');
   const actor = req => req.staff?.name ?? req.role;
   const bumpRevision = () => db.prepare('UPDATE dining_meta SET revision = revision + 1 WHERE id = 1').run();
   const sameActor = (row, req) => row.actor === req.role && (row.actor_staff_id ?? 0) === (req.staff?.id ?? 0);
@@ -78,8 +78,8 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     const no = db.prepare("SELECT COALESCE(MAX(receipt_no), 1000) + 1 AS n FROM orders WHERE station = 'cashier'").get().n;
     const bill = visit.bill;
     const id = Number(db.prepare(`INSERT INTO orders (client_id, station, receipt_no, created_at, payment_method, subtotal_cents, tax_cents, total_cents, kitchen_status, cash_tendered_cents, change_cents, staff_id, staff_name, visit_id, discount_cents, discount_json) VALUES (?, 'cashier', ?, ?, 'cash', ?, ?, ?, 'none', ?, ?, ?, ?, ?, ?, ?)`).run(`dining:${operation.id}`, no, visit.settled_at, bill.subtotal_cents, bill.tax_cents, bill.total_cents, visit.cash_cents, visit.change_cents, req.staff?.id ?? null, actor(req), visit.id, bill.discount_cents, JSON.stringify(visit.discount)).lastInsertRowid);
-    const insert = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, grams) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)');
-    for (const line of linesOf(visit).filter(l => l.qty > 0)) insert.run(id, line.menu_item_id, line.name, line.unit_price_cents, line.qty, line.ready_qty, line.note, line.grams ?? null);
+    const insert = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, grams, station) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)');
+    for (const line of linesOf(visit).filter(l => l.qty > 0)) insert.run(id, line.menu_item_id, line.name, line.unit_price_cents, line.qty, line.ready_qty, line.note, line.grams ?? null, line.station ?? null);
     visit.receipt_id = id; visit.receipt_no = no;
     return id;
   }
@@ -128,11 +128,11 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
   }
   app.use('/api/dining', onlyAmbiente, requireRole('pos', 'kitchen', 'inventory', 'barista'));
   app.use('/api/dining', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
-  app.get('/api/dining/state', requireRole('pos', 'kitchen'), handle((req, res) => {
+  app.get('/api/dining/state', requireRole('pos', 'kitchen', 'barista'), handle((req, res) => {
     const state = readState();
     res.json({ ...state, revision: db.prepare('SELECT revision FROM dining_meta WHERE id = 1').get().revision, menu: menu(), taxRate, receipt: receiptConfig(), serverTime: new Date().toISOString() });
   }));
-  app.post('/api/dining/sync', requireRole('pos', 'kitchen'), handle((req, res) => {
+  app.post('/api/dining/sync', requireRole('pos', 'kitchen', 'barista'), handle((req, res) => {
     const operations = req.body?.operations;
     if (!Array.isArray(operations) || operations.length > 100) throw new DiningError('Send up to 100 operations');
     // Every operation commits independently; retrying a partially completed batch is safe.
@@ -140,7 +140,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     announce();
     for (const result of results) {
       if (result.result?.receipt) broadcast(['pos', 'admin']).emit('order.created', result.result.receipt);
-      if (result.status === 'applied' && result.operation.type === 'counter.kitchen') broadcast(['pos', 'admin', 'kitchen']).emit('ticket.updated', loadOrder(Number(result.operation.targetId)));
+      if (result.status === 'applied' && result.operation.type === 'counter.kitchen') broadcast(['pos', 'admin', 'kitchen', 'barista']).emit('ticket.updated', loadOrder(Number(result.operation.targetId)));
     }
     res.json({ results });
   }));
@@ -207,7 +207,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     const original = db.prepare('SELECT operation FROM dining_operations WHERE id = ?').get(req.params.id);
     const op = JSON.parse(original.operation), state = readState();
     const orderId = op.type === 'counter.kitchen' ? Number(op.targetId) : state.visits[op.targetId]?.receipt_id;
-    if (orderId) broadcast(['pos', 'admin', 'kitchen']).emit('order.updated', loadOrder(orderId));
+    if (orderId) broadcast(['pos', 'admin', 'kitchen', 'barista']).emit('order.updated', loadOrder(orderId));
     res.json(outcome);
   }));
   app.post('/api/dining/conflicts/:id/resolve', requireRole('admin'), handle((req, res) => {
@@ -348,7 +348,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
           const fields = ['subtotal_cents', 'tax_cents', 'total_cents', 'discount_cents', 'discount_json', 'status', 'kitchen_status', 'kitchen_started_at', 'kitchen_ready_at', 'cash_tendered_cents', 'change_cents', 'void_reason', 'voided_at', 'voided_by'];
           db.prepare(`UPDATE orders SET ${fields.map(f => `${f} = ?`).join(', ')}, edit_count = edit_count + 1, edited_at = ?, version = version + 1 WHERE id = ?`).run(...fields.map(f => before[f] ?? null), new Date().toISOString(), current.id);
           db.prepare('DELETE FROM order_items WHERE order_id = ?').run(current.id);
-          for (const l of before.items) db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at, grams) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(l.id, current.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, l.ready_qty, l.note, l.kitchen_ready_at ?? null, l.kitchen_started_at ?? null, l.grams ?? null);
+          for (const l of before.items) db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at, grams, station) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(l.id, current.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, l.ready_qty, l.note, l.kitchen_ready_at ?? null, l.kitchen_started_at ?? null, l.grams ?? null, l.station ?? null);
         }
         if (applyRecipes) {
           const restored = businessSnapshot('order', current.id), delta = new Map();

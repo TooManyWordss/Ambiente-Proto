@@ -4,6 +4,12 @@ export class DiningError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
 const fail = (message, status = 400) => { throw new DiningError(message, status); };
+// Where an item is made: drinks (coffee, tea, frappes, chocolate, smoothies, juices, wine, beer, spirits and
+// cocktails) and cakes, desserts and pastries at the barista's counter; other food in the kitchen, unless it
+// needs no preparing (sends_to_kitchen 0). Older order lines without a station were all the kitchen's.
+const BARISTA = /frappe|coffee|tea|smoothie|chocolate|juice|drink|soda|shake|latte|milk|wine|whisk|beer|cocktail|spirit|liquor|vodka|rum|gin|tequila|shot|dessert|cake|pastr/i;
+export const prepStation = (item) => BARISTA.test(item?.category ?? '') ? 'barista' : Number(item?.sends_to_kitchen) ? 'kitchen' : null;
+export const lineStation = (line) => line?.station ?? 'kitchen';
 export const emptyDining = () => ({ tables: {}, visits: {}, counterOrders: {} });
 export const clone = (value) => structuredClone(value);
 export function text(value, label, max = 200, optional = false) {
@@ -124,7 +130,7 @@ export function applyDining(input, operation, context) {
   text(targetId, 'record ID', 100);
   if (Date.parse(at) > Date.now() + 300000) fail('Device time is in the future');
   if (type === 'counter.kitchen') {
-    allowed(role, ['kitchen']);
+    allowed(role, ['kitchen', 'barista']);
     const order = state.counterOrders?.[targetId];
     version(order, expectedVersion);
     if (!['paid', 'open'].includes(order.status) || order.visit_id || !['new', 'preparing', 'ready'].includes(order.kitchen_status)) fail('This ticket is no longer active', 409);
@@ -132,7 +138,7 @@ export function applyDining(input, operation, context) {
       const line = order.items.find(l => l.id === p.lineId && l.sends_to_kitchen);
       if (!line) fail('Kitchen line not found', 404);
       line.ready_qty = integer(p.ready_qty, 'ready quantity', 0, line.qty);
-    } else if (p.status === 'ready') order.items.forEach(l => { if (l.sends_to_kitchen) l.ready_qty = l.qty; });
+    } else if (p.status === 'ready') order.items.forEach(l => { if (l.sends_to_kitchen && (!p.station || lineStation(l) === p.station)) l.ready_qty = l.qty; });
     else if (p.status !== 'preparing') fail('Unknown kitchen status');
     order.kitchen_started_at ??= at;
     order.kitchen_status = order.items.filter(l => l.sends_to_kitchen).every(l => l.ready_qty === l.qty) ? 'ready' : 'preparing';
@@ -162,7 +168,7 @@ export function applyDining(input, operation, context) {
     } else fail('Unknown table action');
     return state;
   }
-  allowed(role, type.startsWith('kitchen.') ? ['kitchen'] : ['pos']);
+  allowed(role, type.startsWith('kitchen.') ? ['kitchen', 'barista'] : ['pos']);
   const visit = state.visits[targetId];
   version(visit, expectedVersion);
   const editable = () => { if (visit.status !== 'open') fail('This visit is no longer open', 409); };
@@ -185,8 +191,9 @@ export function applyDining(input, operation, context) {
       // A steak sold by weight is named and priced by the weight the cashier entered.
       const sold = byWeight(item) ? weighedLine(item, l.grams) : { name: item.name, unit_price_cents: item.price_cents, grams: null };
       if (sold.error) fail(sold.error);
-      if (l.unit_price_cents !== sold.unit_price_cents || l.name !== sold.name || Number(l.sends_to_kitchen) !== Number(item.sends_to_kitchen)) fail(`Menu details changed for ${item.name}. Review the current menu before retrying.`, 409);
-      return { id, menu_item_id: item.id, name: sold.name, unit_price_cents: sold.unit_price_cents, ...(sold.grams ? { grams: sold.grams } : {}), sends_to_kitchen: Number(item.sends_to_kitchen), qty: integer(l.qty, 'quantity', 1, 99), ready_qty: 0, note: text(l.note, 'preparation note', 300, true), changes: [] };
+      const station = prepStation(item);
+      if (l.unit_price_cents !== sold.unit_price_cents || l.name !== sold.name || Number(l.sends_to_kitchen) !== (station ? 1 : 0)) fail(`Menu details changed for ${item.name}. Review the current menu before retrying.`, 409);
+      return { id, menu_item_id: item.id, name: sold.name, unit_price_cents: sold.unit_price_cents, ...(sold.grams ? { grams: sold.grams } : {}), sends_to_kitchen: station ? 1 : 0, ...(station ? { station } : {}), qty: integer(l.qty, 'quantity', 1, 99), ready_qty: 0, note: text(l.note, 'preparation note', 300, true), changes: [] };
     });
     visit.submissions.push({ id: submissionId, submitted_at: at, started_at: null, ready_at: null, change_seq: 0, acknowledged_seq: 0, lines });
     if (!visit.first_order_at) visit.first_order_at = at;
@@ -213,8 +220,9 @@ export function applyDining(input, operation, context) {
     else if (type === 'kitchen.ready') {
       submission.started_at ??= at;
       // Each line remembers when its last piece became ready, so the till can say "ready" item by item.
-      submission.lines.forEach(l => { if (l.sends_to_kitchen) { if (l.ready_qty < l.qty) l.ready_at = at; l.ready_qty = l.qty; } });
-      submission.acknowledged_seq = submission.change_seq ?? 0;
+      // From the kitchen or the barista, "ready" covers that station's lines only.
+      submission.lines.forEach(l => { if (l.sends_to_kitchen && (!p.station || lineStation(l) === p.station)) { if (l.ready_qty < l.qty) l.ready_at = at; l.ready_qty = l.qty; } });
+      if (ticketState(submission) === 'ready') submission.acknowledged_seq = submission.change_seq ?? 0;
     } else if (type === 'kitchen.line') {
       const line = submission.lines.find(l => l.id === p.lineId && l.sends_to_kitchen && l.qty);
       if (!line) fail('Kitchen line not found', 404);

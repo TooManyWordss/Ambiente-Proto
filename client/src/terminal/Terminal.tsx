@@ -38,7 +38,7 @@ export function Terminal() {
   if (!ready) return <div className="loading">Opening the general terminal…</div>;
   return <div className="terminal">
     <header className="term-head">
-      <Logo mark />
+      <Logo mark home />
       <div><h1>General terminal</h1><p>{STORE_NAME} · every screen, live. You’re signed in as the owner, so anything done here is real.</p></div>
       <a className="btn ghost small" href={storeUrl('/admin')}>Back to admin</a>
     </header>

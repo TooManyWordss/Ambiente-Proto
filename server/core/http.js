@@ -44,7 +44,7 @@ app.get('/:role.webmanifest', (req, res, next) => {
     short_name: `RaiRock ${role}`,
     start_url: `/rairock/${role}`,
     scope: '/rairock/',
-    display: role === 'kitchen' ? 'fullscreen' : 'standalone',
+    display: role === 'kitchen' || role === 'barista' ? 'fullscreen' : 'standalone',
     orientation: 'landscape',
     background_color: '#F6F2E8',
     theme_color: '#08740C',
