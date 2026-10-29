@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { byWeight, perLabel } from '../../../weighed.js';
 import { money } from '../shared/format';
 import type { MenuItem } from '../shared/types';
 import type { MenuGroup } from './menuGroups';
@@ -19,7 +20,7 @@ export function MenuGroupCard({ group, qtyOf, pending = false, availabilityMode,
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
   }, [expanded, onClose]);
   const tap = (item: MenuItem) => { if (pending) onDetails(); else if (availabilityMode) onAvailability(item); else if (item.available) onAdd(item); };
-  const label = (item: MenuItem) => pending ? 'Awaiting approval' : !item.available ? 'Sold out' : availabilityMode ? 'Available' : money(item.price_cents);
+  const label = (item: MenuItem) => pending ? 'Awaiting approval' : !item.available ? 'Sold out' : availabilityMode ? 'Available' : byWeight(item) ? `${money(item.price_cents)} / ${perLabel(item)}` : money(item.price_cents);
   const state = (item: MenuItem) => pending ? 'pending' : !item.available ? 'unavailable' : '';
   // The count remounts when it changes, so it pops each time an item is added.
   const count = (n: number) => n > 0 ? <span key={n} className="in-order" aria-hidden="true">{n}</span> : null;

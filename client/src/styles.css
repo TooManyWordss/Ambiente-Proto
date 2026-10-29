@@ -490,3 +490,22 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 /* Kitchen printer: a banner when tickets are waiting to print or the printer needs connecting. */
 .kp-banner{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:10px 16px 0;padding:12px 14px;border:2px solid var(--warn);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);font-weight:700}
 .kp-banner span{flex:1 1 280px}.kp-banner-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+/* Notes for the cook on an order line: "+ Note" under the item, the quick-pick window, and the note shown on tickets. */
+.cart-line .line-note-btn{grid-column:1/-1;justify-self:start;max-width:100%;padding:2px 8px;border:1px dashed var(--border);border-radius:999px;background:none;color:var(--muted);font-size:.82rem;font-weight:700;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cart-line .line-note-btn.has-note{border-style:solid;border-color:var(--accent);color:var(--accent);background:var(--surface-2);white-space:normal;text-align:left}
+.line-note-text{display:block;color:var(--accent);font-size:.82rem;font-weight:700}
+.quick-notes{display:grid;gap:12px}
+.qn-group{display:grid;gap:6px}.qn-label{color:var(--muted);font-weight:700;font-size:.85rem}
+.qn-chips{display:flex;flex-wrap:wrap;gap:6px}.qn-chips .chip{min-height:40px;border:1px solid var(--border);background:var(--surface);color:var(--text)}.qn-chips .chip.active{border-color:var(--accent);background:var(--accent);color:var(--accent-text)}
+.line-note{display:grid;gap:12px}
+.ti-note{display:block;margin:2px 0 0 1.6em;color:var(--warn);font-weight:800;font-size:.95rem}
+.r-slip-note{font-size:.9em;margin-left:1em}
+.pickup-wait{color:var(--muted);font-size:.82rem;font-weight:700}
+/* Weighing a steak sold by weight: the size it falls in lights up as the weight is typed. */
+.weigh{display:grid;gap:12px}.weigh input{font-size:1.4rem;font-weight:700}
+.weigh-sizes{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px}
+.weigh-size{display:grid;gap:2px;justify-items:center;padding:10px 8px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--muted);text-align:center}
+.weigh-size strong{font:800 1.5rem var(--display);color:var(--text)}
+.weigh-size.active{border-color:var(--accent);background:var(--accent);color:var(--accent-text)}.weigh-size.active strong{color:var(--accent-text)}
+.weigh-result{margin:0;min-height:1.5em;font-size:1.05rem}

@@ -16,7 +16,8 @@ test('supplied menu has complete, distinct sellable options', () => {
   assert.equal(menuCatalog.length, 218);
   assert.equal(new Set(menuCatalog.map((item) => `${item.category}|${item.name}`)).size, menuCatalog.length);
   assert(menuCatalog.every((item) => item.name.length <= 60 && item.category.length <= 30 && item.priceCents > 0));
-  assert.equal(menuCatalog.find((item) => item.name === 'Japanese Kobe A5 Wagyu Steak (per gram)')?.priceCents, 2000);
+  assert.deepEqual((({ priceCents, perGrams, sizes }) => ({ priceCents, perGrams, sizes }))(menuCatalog.find((item) => item.name === 'Japanese Kobe A5 Wagyu Steak')), { priceCents: 2000, perGrams: 1, sizes: 'S<60,M<100,L' });
+  assert.deepEqual((({ priceCents, perGrams }) => ({ priceCents, perGrams }))(menuCatalog.find((item) => item.name === 'USDA Prime Striploin')), { priceCents: 89900, perGrams: 100 });
   for (const [category, count] of [['Seafood / Vegetables', 12], ['Pasta', 10], ['Pica-Pica / Soups', 13]]) {
     const items = menuCatalog.filter(item => item.category === category);
     assert.equal(items.length, count);
@@ -40,7 +41,7 @@ test('every size and price option has a detailed description without inventing h
   assert.match(find('Velvet Dreams (16oz)').descriptionNote, /do not assume.*red velvet/i);
   assert.match(find('Fiesta Strips').description, /does not identify the main ingredient/);
   assert.match(find('Hot Tea Regular (Option 1)').descriptionNote, /Option 1 or Option 2/);
-  assert.match(find('Japanese Kobe A5 Wagyu Steak (per gram)').description, /per gram/);
+  assert.match(find('Japanese Kobe A5 Wagyu Steak').description, /per gram/);
   assert.equal(find('Espresso Martini').descriptionSources[0].url, 'https://iba-world.com/iba-cocktail/espresso-martini/');
 });
 
@@ -55,7 +56,7 @@ test('older API responses and offline caches receive all supplied descriptions i
   }
   assert.match(getMenuDescription(' Frappe ', 'Cappuccino Frappe (16 oz)').description, /cappuccino/i);
   assert.match(getMenuDescription('Hot Coffee', 'Espresso (1 shot)').description, /One concentrated shot/);
-  assert.match(getMenuDescription('Beef / Chicken', 'Japanese Kobe A5 Wagyu Steak (per gram)').description, /per gram/);
+  assert.match(getMenuDescription('Beef / Chicken', 'Japanese Kobe A5 Wagyu Steak').description, /per gram/);
   const custom = { name: 'Cappuccino Frappe (16oz)', category: 'Frappe', description: 'Our approved house recipe.' };
   assert.equal(withMenuDescription(custom, 'ambiente').description, custom.description);
   assert.equal(withMenuDescription({ ...custom, description: '' }, 'rairock').description, `${custom.name} — Frappe.`);
@@ -104,6 +105,10 @@ test('startup updates menu once and keeps past order items', async () => {
       assert.equal(db.prepare("SELECT price_cents FROM menu_items WHERE name = 'Cappuccino Frappe (16oz)' AND active = 1").get().price_cents, 20900);
       assert.equal(db.prepare("SELECT price_cents FROM menu_items WHERE name = 'Chocolate Cake' AND active = 1").get().price_cents, 18100);
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM menu_items WHERE category = 'Seafood / Vegetables' AND active = 1").get().n, 12);
+      // The steaks sold by weight get their weights; the Wagyu loses "(per gram)" from its name.
+      assert.deepEqual({ ...db.prepare("SELECT price_cents, per_grams, sizes FROM menu_items WHERE name = 'Japanese Kobe A5 Wagyu Steak' AND active = 1").get() }, { price_cents: 2000, per_grams: 1, sizes: 'S<60,M<100,L' });
+      assert.deepEqual({ ...db.prepare("SELECT price_cents, per_grams, sizes FROM menu_items WHERE name = 'USDA Prime Striploin' AND active = 1").get() }, { price_cents: 89900, per_grams: 100, sizes: null });
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM menu_items WHERE name LIKE '%(per gram)' AND active = 1").get().n, 0);
     } finally { db.close(); }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

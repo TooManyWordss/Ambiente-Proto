@@ -53,6 +53,9 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
     });
     await t.test('partial readiness, quantity cancellation, extra submission, FIFO timestamps', async () => {
       await act('kitchen.line', visit, { submissionId: submission, lineId: firstLine, ready_qty: 1 }, kitchen);
+      // One piece of a table's order ready: the till already lists it, the rest still cooking.
+      const partTable = (await request('/api/pos/ready', pos)).data.find(p => p.key === `table:${submission}`);
+      assert.deepEqual([partTable.complete, partTable.ready, partTable.total, partTable.items[0].keys], [false, 1, 3, [`line:${firstLine}:1`]]);
       let state = await snapshot(), v = state.visits[visit], originalTime = v.submissions[0].submitted_at;
       assert.equal(ticketState(v.submissions[0]), 'preparing');
       await act('visit.line', visit, { lineId: firstLine, qty: 2, note: 'No onions; sauce aside' });
@@ -66,13 +69,23 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       assert.deepEqual(heat.others.map(u => [u.name, u.seatings, u.guests]), [['Garden', 1, 3]]);
       // The till lists the finished table order as ready to collect.
       const pickups = (await request('/api/pos/ready', pos)).data;
-      assert.deepEqual(pickups.map(p => [p.key, p.title, p.items]), [[`table:${submission}`, 'Garden', [{ name: item.name, qty: 2 }]]]);
+      assert.deepEqual(pickups.map(p => [p.key, p.title, p.complete, p.items.map(i => [i.name, i.qty, i.note])]), [[`table:${submission}`, 'Garden', true, [[item.name, 2, 'No onions; sauce aside']]]]);
       const current = (await snapshot()).menu.find(m => m.id === item.id);
       await act('visit.submit', visit, { submissionId: id(), lines: [{ id: id(), menu_item_id: current.id, name: current.name, unit_price_cents: current.price_cents, sends_to_kitchen: current.sends_to_kitchen, qty: 1, note: '' }] });
       v = (await snapshot()).visits[visit];
       assert.equal(v.first_order_at, originalTime);
       assert.ok(v.submissions[1].submitted_at > originalTime);
       assert.equal(ticketState(v.submissions[1]), 'new');
+      // A steak sold by weight is named and priced by its weight; a line without one, or with the per-gram price, is refused.
+      const wagyu = (await snapshot()).menu.find(m => m.name === 'Japanese Kobe A5 Wagyu Steak');
+      const steak = (extra) => ({ id: id(), menu_item_id: wagyu.id, sends_to_kitchen: wagyu.sends_to_kitchen, qty: 1, note: '', ...extra });
+      const vers = (await snapshot()).visits[visit].version;
+      for (const bad of [{ name: wagyu.name, unit_price_cents: wagyu.price_cents }, { name: wagyu.name, unit_price_cents: wagyu.price_cents, grams: 85 }]) {
+        assert.notEqual((await sync([envelope('visit.submit', visit, vers, { submissionId: id(), lines: [steak(bad)] })])).data.results[0].status, 'applied');
+      }
+      await act('visit.submit', visit, { submissionId: id(), lines: [steak({ name: 'Japanese Kobe A5 Wagyu Steak (M · 85 g)', unit_price_cents: 170000, grams: 85 })] });
+      const weighed = (await snapshot()).visits[visit].submissions[2].lines[0];
+      assert.deepEqual([weighed.name, weighed.unit_price_cents, weighed.grams], ['Japanese Kobe A5 Wagyu Steak (M · 85 g)', 170000, 85]);
     });
     await t.test('manual discounts, explicit events, one receipt, idempotent retry', async () => {
       await act('visit.discount', visit, { discount: { kind: 'percent', value: 2000, reason: 'Owner-approved concession', label: 'PWD' } });

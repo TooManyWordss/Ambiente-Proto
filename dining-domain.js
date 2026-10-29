@@ -1,4 +1,5 @@
 // Shared by the server and offline POS. Money is always integer centavos.
+import { byWeight, weighedLine } from './weighed.js';
 export class DiningError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
@@ -123,8 +124,11 @@ export function applyDining(input, operation, context) {
       const item = context.menu.find(m => m.id === l.menu_item_id && m.active !== 0 && m.status !== 'pending' && m.status !== 'rejected');
       if (!item) fail('A selected menu item no longer exists', 409);
       if (item.unavailable_since ? item.unavailable_since <= at : item.available === 0) fail(`${item.name} is unavailable`, 409);
-      if (l.unit_price_cents !== item.price_cents || l.name !== item.name || Number(l.sends_to_kitchen) !== Number(item.sends_to_kitchen)) fail(`Menu details changed for ${item.name}. Review the current menu before retrying.`, 409);
-      return { id, menu_item_id: item.id, name: item.name, unit_price_cents: item.price_cents, sends_to_kitchen: Number(item.sends_to_kitchen), qty: integer(l.qty, 'quantity', 1, 99), ready_qty: 0, note: text(l.note, 'preparation note', 300, true), changes: [] };
+      // A steak sold by weight is named and priced by the weight the cashier entered.
+      const sold = byWeight(item) ? weighedLine(item, l.grams) : { name: item.name, unit_price_cents: item.price_cents, grams: null };
+      if (sold.error) fail(sold.error);
+      if (l.unit_price_cents !== sold.unit_price_cents || l.name !== sold.name || Number(l.sends_to_kitchen) !== Number(item.sends_to_kitchen)) fail(`Menu details changed for ${item.name}. Review the current menu before retrying.`, 409);
+      return { id, menu_item_id: item.id, name: sold.name, unit_price_cents: sold.unit_price_cents, ...(sold.grams ? { grams: sold.grams } : {}), sends_to_kitchen: Number(item.sends_to_kitchen), qty: integer(l.qty, 'quantity', 1, 99), ready_qty: 0, note: text(l.note, 'preparation note', 300, true), changes: [] };
     });
     visit.submissions.push({ id: submissionId, submitted_at: at, started_at: null, ready_at: null, change_seq: 0, acknowledged_seq: 0, lines });
     if (!visit.first_order_at) visit.first_order_at = at;
@@ -150,12 +154,15 @@ export function applyDining(input, operation, context) {
     else if (type === 'kitchen.start') submission.started_at ??= at;
     else if (type === 'kitchen.ready') {
       submission.started_at ??= at;
-      submission.lines.forEach(l => { if (l.sends_to_kitchen) l.ready_qty = l.qty; });
+      // Each line remembers when its last piece became ready, so the till can say "ready" item by item.
+      submission.lines.forEach(l => { if (l.sends_to_kitchen) { if (l.ready_qty < l.qty) l.ready_at = at; l.ready_qty = l.qty; } });
       submission.acknowledged_seq = submission.change_seq ?? 0;
     } else if (type === 'kitchen.line') {
       const line = submission.lines.find(l => l.id === p.lineId && l.sends_to_kitchen && l.qty);
       if (!line) fail('Kitchen line not found', 404);
-      line.ready_qty = integer(p.ready_qty, 'ready quantity', 0, line.qty);
+      const readyQty = integer(p.ready_qty, 'ready quantity', 0, line.qty);
+      if (readyQty > line.ready_qty) line.ready_at = at; else if (!readyQty) line.ready_at = null;
+      line.ready_qty = readyQty;
       submission.started_at ??= at;
     } else fail('Unknown kitchen action');
     if (at < submission.submitted_at) fail('Kitchen time precedes order time');

@@ -69,6 +69,44 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     const day = (await call('/api/admin/day', owner)).body;
     assert.ok(day.logs.some((l) => l.action === 'inventory.low' && l.message.includes('Corn')));
 
+    // Notes for the cook travel with each item: saved with the sale, kept by an edit that doesn't send
+    // them, changed or removed by one that does, and logged. An over-long note is refused.
+    const noted = await call('/api/orders', pos, 'POST', { clientId: 'noted-1', items: [{ menuItemId: other.id, qty: 1, note: '  Medium rare, not spicy ' }] });
+    assert.equal(noted.status, 201);
+    assert.equal(noted.body.items[0].note, 'Medium rare, not spicy');
+    assert.equal((await call('/api/orders', pos, 'POST', { clientId: 'noted-2', items: [{ menuItemId: other.id, qty: 1, note: 'x'.repeat(141) }] })).status, 400);
+    const kept = await call(`/api/orders/${noted.body.id}`, pos, 'PATCH', { items: [{ menuItemId: other.id, qty: 2 }] });
+    assert.equal(kept.body.order.items[0].note, 'Medium rare, not spicy');
+    const renoted = await call(`/api/orders/${noted.body.id}`, pos, 'PATCH', { items: [{ menuItemId: other.id, qty: 2, note: 'Well done' }] });
+    assert.equal(renoted.status, 200);
+    assert.equal(renoted.body.order.items[0].note, 'Well done');
+    assert.ok((await call('/api/admin/day', owner)).body.logs.some((l) => l.message.includes('Note on') && l.message.includes('"Well done"')));
+    assert.equal((await call(`/api/orders/${noted.body.id}/void`, pos, 'POST', { reason: 'test' })).status, 200);
+
+    // Steaks sold by weight: priced by the grams typed, sized S/M/L, one line per weight. A sale or edit without a weight is refused.
+    const wagyu = menu.items.find((i) => i.name === 'Japanese Kobe A5 Wagyu Steak'), striploin = menu.items.find((i) => i.name === 'USDA Prime Striploin');
+    assert.deepEqual([wagyu.per_grams, wagyu.sizes, striploin.per_grams], [1, 'S<60,M<100,L', 100]);
+    assert.equal((await call('/api/orders', pos, 'POST', { clientId: 'steak-0', items: [{ menuItemId: wagyu.id, qty: 1 }] })).status, 400);
+    assert.equal((await call('/api/orders', pos, 'POST', { clientId: 'steak-00', items: [{ menuItemId: other.id, qty: 1, grams: 80 }] })).status, 400);
+    const steaks = await call('/api/orders', pos, 'POST', { clientId: 'steak-1', items: [{ menuItemId: wagyu.id, qty: 1, grams: 59 }, { menuItemId: wagyu.id, qty: 2, grams: 85 }, { menuItemId: wagyu.id, qty: 1, grams: 100 }, { menuItemId: striploin.id, qty: 1, grams: 250 }] });
+    assert.equal(steaks.status, 201);
+    assert.deepEqual(steaks.body.items.map((i) => [i.name, i.qty, i.unit_price_cents, i.grams]), [
+      ['Japanese Kobe A5 Wagyu Steak (S · 59 g)', 1, 118000, 59],
+      ['Japanese Kobe A5 Wagyu Steak (M · 85 g)', 2, 170000, 85],
+      ['Japanese Kobe A5 Wagyu Steak (L · 100 g)', 1, 200000, 100],
+      ['USDA Prime Striploin (250 g)', 1, 224750, 250],
+    ]);
+    assert.equal(steaks.body.subtotal_cents, 118000 + 2 * 170000 + 200000 + 224750);
+    // An edit keeps each weighed line apart: one fewer 85 g steak, the 59 g one gone, a 120 g one added.
+    const steakEdit = await call(`/api/orders/${steaks.body.id}`, pos, 'PATCH', { items: [{ menuItemId: wagyu.id, qty: 1, grams: 85 }, { menuItemId: wagyu.id, qty: 1, grams: 100 }, { menuItemId: wagyu.id, qty: 1, grams: 120 }, { menuItemId: striploin.id, qty: 1, grams: 250 }] });
+    assert.equal(steakEdit.status, 200);
+    assert.deepEqual(steakEdit.body.order.items.map((i) => [i.name, i.qty]), [
+      ['Japanese Kobe A5 Wagyu Steak (M · 85 g)', 1], ['Japanese Kobe A5 Wagyu Steak (L · 100 g)', 1], ['USDA Prime Striploin (250 g)', 1], ['Japanese Kobe A5 Wagyu Steak (L · 120 g)', 1],
+    ]);
+    assert.equal(steakEdit.body.order.subtotal_cents, 170000 + 200000 + 224750 + 240000);
+    assert.equal((await call(`/api/orders/${steaks.body.id}`, pos, 'PATCH', { items: [{ menuItemId: wagyu.id, qty: 1 }] })).status, 400);
+    assert.equal((await call(`/api/orders/${steaks.body.id}/void`, pos, 'POST', { reason: 'test' })).status, 200);
+
     // Editing down to 1 puts 1 back; voiding puts the rest back.
     const edit = await call(`/api/orders/${sale.body.id}`, owner, 'PATCH', { items: [{ menuItemId: corn.id, qty: 1 }, { menuItemId: other.id, qty: 1 }] });
     assert.equal(edit.status, 200);
@@ -99,7 +137,10 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
       const keptItem = kept.body.order.items.find((i) => i.menu_item_id === first.menu_item_id);
       assert.ok(keptItem.kitchen_ready_at);
       const last = kept.body.order.items.find((i) => i.menu_item_id === second.menu_item_id);
-      assert.deepEqual((await call('/api/pos/ready', pos)).body, []);
+      // The till already lists the finished item, as part of an order that's still cooking.
+      const [part] = (await call('/api/pos/ready', pos)).body;
+      assert.deepEqual([part.key, part.complete, part.ready, part.total], [`order:${order.id}`, false, 1, 3]);
+      assert.deepEqual(part.items, [{ name: first.name, qty: 1, note: null, keys: [`item:${keptItem.id}:1`] }]);
       // Finishing the last item tells the till, which shows the order as ready to collect.
       const till = connect(base, { extraHeaders: { cookie: pos }, auth: { store: 'ambiente' }, transports: ['websocket'] });
       await new Promise((resolve, reject) => { till.on('connect', resolve); till.on('connect_error', reject); });
@@ -111,7 +152,9 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
       const [pickup] = (await call('/api/pos/ready', pos)).body;
       assert.equal(pickup.key, `order:${order.id}`);
       assert.equal(pickup.label, done.body.receipt_label);
-      assert.deepEqual(pickup.items, [{ name: first.name, qty: 1 }, { name: last.name, qty: 2 }]);
+      assert.deepEqual(pickup.items.map(({ name, qty }) => ({ name, qty })), [{ name: first.name, qty: 1 }, { name: last.name, qty: 2 }]);
+      assert.equal(pickup.complete, true);
+      assert.deepEqual(pickup.items[1].keys, [`item:${last.id}:1`, `item:${last.id}:2`]);
       assert.equal((await call('/api/pos/ready', kitchen)).status, 401);
     }
 

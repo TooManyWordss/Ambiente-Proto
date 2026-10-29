@@ -79,7 +79,7 @@ Beef Belly Steak|599
 Truffle Chicken Popcorn|759
 Char Grilled Japanese Wagyu Skewers|789
 USDA Prime Striploin|899
-Japanese Kobe A5 Wagyu Steak (per gram)|20`],
+Japanese Kobe A5 Wagyu Steak|20`],
   ['Burgers / Sandwiches', '', `
 Clubhouse Classic / Pesto|359
 Classic American Angus Cheese Burger|459
@@ -187,6 +187,12 @@ Margarita|599
 Frozen Mango Margarita|599`],
 ];
 
+// Steaks weighed at the till: the price above buys `perGrams` grams, and `sizes` are its weight bands (weighed.js).
+const BY_WEIGHT = {
+  'Japanese Kobe A5 Wagyu Steak': { perGrams: 1, sizes: 'S<60,M<100,L' },
+  'USDA Prime Striploin': { perGrams: 100, sizes: '' },
+};
+
 export const menuCatalog = sections.flatMap(([category, sizeList, rows]) => {
   const sizes = sizeList ? sizeList.split(',') : [];
   return rows.trim().split('\n').flatMap((row) => {
@@ -195,7 +201,7 @@ export const menuCatalog = sections.flatMap(([category, sizeList, rows]) => {
       const [size, price] = entry.includes(':') ? entry.split(':') : [sizes[index], entry];
       const name = size ? `${baseName} (${size})` : baseName;
       const sendsToKitchen = !['Sparkling Wine', 'White Wine', 'Red Wine', 'Dessert Wine', 'Whiskey', 'Beer'].includes(category);
-      return { name, category, priceCents: Number(price) * 100, sendsToKitchen: Number(sendsToKitchen), ...getMenuDescription(category, baseName) };
+      return { name, category, priceCents: Number(price) * 100, sendsToKitchen: Number(sendsToKitchen), ...BY_WEIGHT[name], ...getMenuDescription(category, baseName) };
     });
   });
 });

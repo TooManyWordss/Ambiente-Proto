@@ -78,8 +78,8 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     const no = db.prepare("SELECT COALESCE(MAX(receipt_no), 1000) + 1 AS n FROM orders WHERE station = 'cashier'").get().n;
     const bill = visit.bill;
     const id = Number(db.prepare(`INSERT INTO orders (client_id, station, receipt_no, created_at, payment_method, subtotal_cents, tax_cents, total_cents, kitchen_status, cash_tendered_cents, change_cents, staff_id, staff_name, visit_id, discount_cents, discount_json) VALUES (?, 'cashier', ?, ?, 'cash', ?, ?, ?, 'none', ?, ?, ?, ?, ?, ?, ?)`).run(`dining:${operation.id}`, no, visit.settled_at, bill.subtotal_cents, bill.tax_cents, bill.total_cents, visit.cash_cents, visit.change_cents, req.staff?.id ?? null, actor(req), visit.id, bill.discount_cents, JSON.stringify(visit.discount)).lastInsertRowid);
-    const insert = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note) VALUES (?, ?, ?, ?, ?, 0, ?, ?)');
-    for (const line of linesOf(visit).filter(l => l.qty > 0)) insert.run(id, line.menu_item_id, line.name, line.unit_price_cents, line.qty, line.ready_qty, line.note);
+    const insert = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, grams) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)');
+    for (const line of linesOf(visit).filter(l => l.qty > 0)) insert.run(id, line.menu_item_id, line.name, line.unit_price_cents, line.qty, line.ready_qty, line.note, line.grams ?? null);
     visit.receipt_id = id; visit.receipt_no = no;
     return id;
   }
@@ -348,7 +348,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
           const fields = ['subtotal_cents', 'tax_cents', 'total_cents', 'discount_cents', 'discount_json', 'status', 'kitchen_status', 'kitchen_started_at', 'kitchen_ready_at', 'cash_tendered_cents', 'change_cents', 'void_reason', 'voided_at', 'voided_by'];
           db.prepare(`UPDATE orders SET ${fields.map(f => `${f} = ?`).join(', ')}, edit_count = edit_count + 1, edited_at = ?, version = version + 1 WHERE id = ?`).run(...fields.map(f => before[f] ?? null), new Date().toISOString(), current.id);
           db.prepare('DELETE FROM order_items WHERE order_id = ?').run(current.id);
-          for (const l of before.items) db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(l.id, current.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, l.ready_qty, l.note, l.kitchen_ready_at ?? null, l.kitchen_started_at ?? null);
+          for (const l of before.items) db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at, grams) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(l.id, current.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, l.ready_qty, l.note, l.kitchen_ready_at ?? null, l.kitchen_started_at ?? null, l.grams ?? null);
         }
         if (applyRecipes) {
           const restored = businessSnapshot('order', current.id), delta = new Map();

@@ -95,6 +95,8 @@ addMissingColumns('menu_items', {
   requested_at: 'TEXT',
   reviewed_at: 'TEXT',
   unavailable_since: 'TEXT', // set while staff have marked it unavailable (sold out); NULL = can be sold
+  per_grams: 'INTEGER', // sold by weight: the price buys this many grams (see weighed.js); NULL = by the piece
+  sizes: 'TEXT', // weight bands of a weighed item, e.g. "S<60,M<100,L"
 });
 addMissingColumns('orders', {
   status: "TEXT NOT NULL DEFAULT 'paid'", // paid | voided
@@ -238,6 +240,7 @@ db.exec(`
 `);
 // The kitchen can mark single items ready while the rest of the ticket is still being made.
 addMissingColumns('order_items', { kitchen_ready_at: 'TEXT', kitchen_started_at: 'TEXT' }); // per item: cooking since / ready at
+addMissingColumns('order_items', { grams: 'INTEGER' }); // a weighed steak's weight; NULL = sold by the piece
 
 db.exec(`
   -- The dining room. x, y, w, h place each table on the floor map (1280 × 720 drawing).

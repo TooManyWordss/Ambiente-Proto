@@ -281,7 +281,7 @@ app.get('/api/admin/period', (req, res) => {
   const range = [start.toISOString(), end.toISOString()];
   const topItems = db
     .prepare(
-      `SELECT MAX(oi.name) AS name, SUM(oi.qty) AS qty, SUM(oi.qty * oi.unit_price_cents) AS revenue_cents
+      `SELECT CASE WHEN MAX(oi.grams) IS NULL THEN MAX(oi.name) ELSE (SELECT m.name FROM menu_items m WHERE m.id = oi.menu_item_id) END AS name, SUM(oi.qty) AS qty, SUM(oi.qty * oi.unit_price_cents) AS revenue_cents
          FROM order_items oi JOIN orders o ON o.id = oi.order_id
         WHERE o.created_at >= ? AND o.created_at < ? AND o.status = 'paid'
         GROUP BY oi.menu_item_id

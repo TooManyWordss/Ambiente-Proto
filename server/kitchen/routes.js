@@ -19,16 +19,36 @@ app.get('/api/pos/kitchen-screens', (req, res) => {
 // Kitchen orders finished in the last hour, for the till that took them. The POS shows each one, with a
 // chime, until someone taps "Picked up". Counter orders and table orders (from Unpaid tabs) both count.
 const PICKUP_WINDOW_MS = 60 * 60 * 1000;
-const kitchenItems = (lines) => lines.filter((l) => l.sends_to_kitchen && l.qty > 0).map((l) => ({ name: l.name, qty: l.qty }));
+// Ready to collect, item by item: each piece the kitchen finishes shows on the till, grouped by order,
+// without waiting for the whole order. Every piece has its own key, so "Picked up" on part of an order
+// leaves the rest to ring when it's done. Each group says how much of the order is ready.
+const unitKeys = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}:${i + 1}`);
+const group = (key, title, label, units, ready) => ready.length && ({
+  key, title, label, items: ready.map(({ ready_at, ...item }) => item),
+  ready_at: ready.map((r) => r.ready_at).sort().at(-1),
+  ready: ready.reduce((n, r) => n + r.qty, 0), total: units, complete: ready.reduce((n, r) => n + r.qty, 0) === units,
+});
 export function readyForPickup(station) {
   const since = new Date(Date.now() - PICKUP_WINDOW_MS).toISOString();
-  const orders = attachItems(db.prepare("SELECT * FROM orders WHERE status = 'paid' AND kitchen_status = 'ready' AND kitchen_ready_at >= ? AND station = ?").all(since, station))
-    .map((o) => ({ key: `order:${o.id}`, title: o.table_name ?? 'Takeout', label: o.receipt_label, items: kitchenItems(o.items), ready_at: o.kitchen_ready_at }));
-  if (station !== 'cashier' || currentStore() !== 'ambiente') return orders;
-  const visits = db.prepare("SELECT document FROM dining_visits WHERE EXISTS (SELECT 1 FROM json_each(document, '$.submissions') s WHERE json_extract(s.value, '$.ready_at') >= ?)").all(since).map((r) => JSON.parse(r.document));
-  const tables = visits.flatMap((v) => v.submissions.filter((s) => s.ready_at >= since && !s.cancelled_at && ticketState(s) === 'ready')
-    .map((s) => ({ key: `table:${s.id}`, title: v.table_name, label: null, items: kitchenItems(s.lines), ready_at: s.ready_at })));
-  return [...orders, ...tables].sort((a, b) => a.ready_at.localeCompare(b.ready_at));
+  const recent = db.prepare(`SELECT DISTINCT o.* FROM orders o JOIN order_items i ON i.order_id = o.id
+    WHERE o.status = 'paid' AND o.station = ? AND i.sends_to_kitchen = 1 AND i.kitchen_ready_at >= ?`).all(station, since);
+  const orders = attachItems(recent).map((o) => {
+    const kitchen = o.items.filter((i) => i.sends_to_kitchen && i.qty > 0);
+    const ready = kitchen.filter((i) => i.kitchen_ready_at >= since)
+      .map((i) => ({ name: i.name, qty: i.qty, note: i.note || null, keys: unitKeys(`item:${i.id}`, i.qty), ready_at: i.kitchen_ready_at }));
+    return group(`order:${o.id}`, o.table_name ?? 'Takeout', o.receipt_label, kitchen.reduce((n, i) => n + i.qty, 0), ready);
+  });
+  if (station !== 'cashier' || currentStore() !== 'ambiente') return orders.filter(Boolean).sort((a, b) => a.ready_at.localeCompare(b.ready_at));
+  // Older tab records have no time per line; their finished ticket's time stands in.
+  const visits = db.prepare(`SELECT document FROM dining_visits WHERE EXISTS (SELECT 1 FROM json_each(document, '$.submissions') s
+    WHERE json_extract(s.value, '$.ready_at') >= ?1 OR EXISTS (SELECT 1 FROM json_each(s.value, '$.lines') l WHERE json_extract(l.value, '$.ready_at') >= ?1))`).all(since).map((r) => JSON.parse(r.document));
+  const tables = visits.flatMap((v) => v.submissions.filter((s) => !s.cancelled_at && ticketState(s) !== 'cancelled').map((s) => {
+    const kitchen = s.lines.filter((l) => l.sends_to_kitchen && l.qty > 0);
+    const ready = kitchen.map((l) => ({ l, at: l.ready_at ?? s.ready_at })).filter(({ l, at }) => l.ready_qty > 0 && at >= since)
+      .map(({ l, at }) => ({ name: l.name, qty: Math.min(l.ready_qty, l.qty), note: l.note || null, keys: unitKeys(`line:${l.id}`, Math.min(l.ready_qty, l.qty)), ready_at: at }));
+    return group(`table:${s.id}`, v.table_name, null, kitchen.reduce((n, l) => n + l.qty, 0), ready);
+  }));
+  return [...orders, ...tables].filter(Boolean).sort((a, b) => a.ready_at.localeCompare(b.ready_at));
 }
 app.get('/api/pos/ready', (req, res) => res.json(readyForPickup(stationOf(req, req.query.station))));
 // Tells the tills to reload their ready-to-collect list.
@@ -107,6 +127,7 @@ app.patch('/api/orders/:id/items/:itemId/kitchen', requireRole('kitchen'), (req,
 
   const updated = loadOrder(order.id);
   storeBroadcast(['kitchen', 'admin']).emit('ticket.updated', updated);
-  if ((updated.kitchen_status === 'ready') !== (order.kitchen_status === 'ready')) announcePickup();
+  // The till hears about every item that becomes ready (or is taken back), not just finished orders.
+  if (Boolean(item.kitchen_ready_at) !== (state === 'ready')) announcePickup();
   res.json(updated);
 });

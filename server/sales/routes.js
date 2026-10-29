@@ -8,12 +8,26 @@ import { dayReport, loadOrder, logActivity, saleTime } from './orders.js';
 import { app, notifyOwnerOverview, storeBroadcast } from '../core/http.js';
 import { applyRecipes } from '../inventory/routes.js';
 import { announceTables, openTableOrders } from '../tables/routes.js';
+import { byWeight, weighedLine } from '../../weighed.js';
 
 // ---------- Sales ----------
 
 export const findSellable = {
   get(id) { return db.prepare("SELECT * FROM menu_items WHERE id = ? AND active = 1 AND status = 'approved'").get(id); },
 };
+
+// A cook's instruction on one item ("Medium rare, not spicy"). Empty when there is none; null if it's too long.
+const NOTE_MAX = 140;
+const cleanNote = (note) => note == null ? '' : typeof note === 'string' && note.trim().length <= NOTE_MAX ? note.trim() : null;
+// What one line sells: a weighed steak is named and priced by its weight. Returns an error message instead if the weight is missing or wrong.
+function sellAs(menuItem, grams) {
+  if (!byWeight(menuItem)) return grams == null ? { name: menuItem.name, unit_price_cents: menuItem.price_cents, grams: null } : `${menuItem.name} isn't sold by weight`;
+  if (grams == null) return `Weigh the ${menuItem.name} first: it's sold by weight`;
+  const line = weighedLine(menuItem, grams);
+  return line.error ?? line;
+}
+// Lines of a receipt are told apart by item and, for weighed steaks, weight: a 55 g and an 85 g Wagyu are two lines.
+const lineKey = (menuItemId, grams) => `${menuItemId}:${grams ?? ''}`;
 
 // POS or barista bar -> server: ring up a cash sale.
 app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
@@ -34,7 +48,7 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   // Prices come from the database, never from the client.
   const lines = [];
   const rungUpAt = saleTime(createdAt);
-  for (const { menuItemId, qty } of items) {
+  for (const { menuItemId, qty, note: rawNote, grams } of items) {
     const menuItem = findSellable.get(Number(menuItemId));
     if (!menuItem) return res.status(400).json({ error: `Item ${menuItemId} is not on the menu` });
     // A sale saved offline before the item ran out still goes through.
@@ -44,11 +58,15 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
     if (!Number.isInteger(qty) || qty < 1 || qty > 99) {
       return res.status(400).json({ error: `Invalid quantity for ${menuItem.name}` });
     }
-    lines.push({ menuItem, qty });
+    const note = cleanNote(rawNote);
+    if (note === null) return res.status(400).json({ error: `The note on ${menuItem.name} is too long (${NOTE_MAX} characters at most)` });
+    const sold = sellAs(menuItem, grams);
+    if (typeof sold === 'string') return res.status(400).json({ error: sold });
+    lines.push({ menuItem, qty, note, ...sold });
   }
 
   let bill;
-  try { bill = diningTotals({ discount, submissions: [{ lines: lines.map(l => ({ qty: l.qty, unit_price_cents: l.menuItem.price_cents })) }] }, TAX_RATE); }
+  try { bill = diningTotals({ discount, submissions: [{ lines: lines.map(l => ({ qty: l.qty, unit_price_cents: l.unit_price_cents })) }] }, TAX_RATE); }
   catch (e) { return res.status(400).json({ error: e.message }); }
   const { subtotal_cents: subtotal, tax_cents: tax, total_cents: total } = bill;
   let tendered = null;
@@ -98,11 +116,11 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
         .lastInsertRowid
     );
     const insertItem = db.prepare(
-      `INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, note, grams)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    for (const { menuItem, qty } of lines) {
-      insertItem.run(orderId, menuItem.id, menuItem.name, menuItem.price_cents, qty, menuItem.sends_to_kitchen);
+    for (const { menuItem, qty, note, name, unit_price_cents, grams } of lines) {
+      insertItem.run(orderId, menuItem.id, name, unit_price_cents, qty, menuItem.sends_to_kitchen, note, grams);
     }
     const sold = new Map();
     for (const { menuItem, qty } of lines) sold.set(menuItem.id, (sold.get(menuItem.id) ?? 0) + qty);
@@ -147,17 +165,24 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
     return res.status(400).json({ error: 'A receipt needs at least one item. Use Void to cancel the whole receipt.' });
   }
 
-  const before = new Map(); // menu item id -> { name, unit_price_cents, sends_to_kitchen, qty }
+  const before = new Map(); // line key -> { name, unit_price_cents, sends_to_kitchen, qty }
   for (const i of order.items) {
-    const prev = before.get(i.menu_item_id);
-    before.set(i.menu_item_id, { ...i, qty: (prev?.qty ?? 0) + i.qty, ready_qty: (prev?.ready_qty ?? 0) + i.ready_qty });
+    const key = lineKey(i.menu_item_id, i.grams), prev = before.get(key);
+    before.set(key, { ...i, qty: (prev?.qty ?? 0) + i.qty, ready_qty: (prev?.ready_qty ?? 0) + i.ready_qty });
   }
 
-  const wanted = new Map();
-  for (const { menuItemId, qty } of items) {
-    const id = Number(menuItemId);
+  const wanted = new Map(), notes = new Map(), weights = new Map();
+  for (const { menuItemId, qty, note, grams } of items) {
+    const id = lineKey(Number(menuItemId), grams);
     if (!Number.isInteger(qty) || qty < 1) return res.status(400).json({ error: 'Invalid quantity' });
     wanted.set(id, (wanted.get(id) ?? 0) + qty);
+    weights.set(id, [Number(menuItemId), grams ?? null]);
+    // A till that doesn't send notes leaves the ones already on the receipt alone.
+    if (note !== undefined) {
+      const clean = cleanNote(note);
+      if (clean === null) return res.status(400).json({ error: `A note is too long (${NOTE_MAX} characters at most)` });
+      notes.set(id, clean);
+    }
   }
 
   const lines = [];
@@ -165,21 +190,26 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
     if (qty > 99) return res.status(400).json({ error: 'Invalid quantity' });
     const prev = before.get(id);
     if (prev) {
-      lines.push({ id: prev.id, ready_qty: Math.min(prev.ready_qty, qty), note: prev.note, menu_item_id: id, name: prev.name, unit_price_cents: prev.unit_price_cents, sends_to_kitchen: prev.sends_to_kitchen, qty });
+      lines.push({ key: id, id: prev.id, ready_qty: Math.min(prev.ready_qty, qty), note: notes.get(id) ?? prev.note ?? '', menu_item_id: prev.menu_item_id, name: prev.name, unit_price_cents: prev.unit_price_cents, sends_to_kitchen: prev.sends_to_kitchen, grams: prev.grams ?? null, qty });
       continue;
     }
-    const menuItem = findSellable.get(id);
-    if (!menuItem) return res.status(400).json({ error: `Item ${id} is not on the menu` });
+    const [menuItemId, grams] = weights.get(id);
+    const menuItem = findSellable.get(menuItemId);
+    if (!menuItem) return res.status(400).json({ error: `Item ${menuItemId} is not on the menu` });
     if (menuItem.unavailable_since) return res.status(400).json({ error: `${menuItem.name} is marked unavailable` });
-    lines.push({ menu_item_id: id, name: menuItem.name, unit_price_cents: menuItem.price_cents, sends_to_kitchen: menuItem.sends_to_kitchen, qty });
+    const sold = sellAs(menuItem, grams);
+    if (typeof sold === 'string') return res.status(400).json({ error: sold });
+    lines.push({ key: id, menu_item_id: menuItemId, sends_to_kitchen: menuItem.sends_to_kitchen, qty, note: notes.get(id) ?? '', ...sold });
   }
 
   // "+1 Fries, −1 Iced Tea" for the activity log.
   const changes = [];
   for (const id of new Set([...before.keys(), ...wanted.keys()])) {
     const diff = (wanted.get(id) ?? 0) - (before.get(id)?.qty ?? 0);
-    const name = before.get(id)?.name ?? lines.find((l) => l.menu_item_id === id).name;
+    const name = before.get(id)?.name ?? lines.find((l) => l.key === id).name;
     if (diff) changes.push(`${diff > 0 ? '+' : '−'}${Math.abs(diff)} ${name}`);
+    const prev = before.get(id), line = lines.find((l) => l.key === id);
+    if (prev && line && (prev.note ?? '') !== line.note) changes.push(line.note ? `Note on ${name}: "${line.note}"` : `Note on ${name} removed`);
   }
   const discount = currentStore() === 'ambiente' && Object.hasOwn(req.body, 'discount') ? req.body.discount : JSON.parse(order.discount_json ?? 'null');
   if (JSON.stringify(discount) !== JSON.stringify(JSON.parse(order.discount_json ?? 'null'))) changes.push('Discount updated');
@@ -195,17 +225,18 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
   // An item the kitchen already marked ready stays ready unless more of it was added.
   const readyAt = new Map();
   for (const i of order.items) {
-    const ready = readyAt.has(i.menu_item_id) ? readyAt.get(i.menu_item_id) && i.kitchen_ready_at : i.kitchen_ready_at;
-    readyAt.set(i.menu_item_id, ready || null);
+    const key = lineKey(i.menu_item_id, i.grams);
+    const ready = readyAt.has(key) ? readyAt.get(key) && i.kitchen_ready_at : i.kitchen_ready_at;
+    readyAt.set(key, ready || null);
   }
-  const startedAt = new Map(order.items.map((i) => [i.menu_item_id, i.kitchen_started_at ?? null]));
+  const startedAt = new Map(order.items.map((i) => [lineKey(i.menu_item_id, i.grams), i.kitchen_started_at ?? null]));
   for (const l of lines) {
-    const kept = l.qty <= (before.get(l.menu_item_id)?.qty ?? 0);
-    l.kitchen_ready_at = kept ? readyAt.get(l.menu_item_id) ?? null : null;
-    l.kitchen_started_at = kept ? startedAt.get(l.menu_item_id) ?? null : null;
+    const kept = l.qty <= (before.get(l.key)?.qty ?? 0);
+    l.kitchen_ready_at = kept ? readyAt.get(l.key) ?? null : null;
+    l.kitchen_started_at = kept ? startedAt.get(l.key) ?? null : null;
   }
   const hasKitchenItems = lines.some((l) => l.sends_to_kitchen);
-  const moreForKitchen = lines.some((l) => l.sends_to_kitchen && l.qty > (before.get(l.menu_item_id)?.qty ?? 0));
+  const moreForKitchen = lines.some((l) => l.sends_to_kitchen && l.qty > (before.get(l.key)?.qty ?? 0));
   const allReady = hasKitchenItems && lines.every((l) => !l.sends_to_kitchen || l.kitchen_ready_at);
   let kitchenStatus = order.kitchen_status;
   if (!hasKitchenItems && ['new', 'preparing', 'none'].includes(kitchenStatus)) kitchenStatus = 'none';
@@ -214,18 +245,22 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
   else if (allReady && ['new', 'preparing'].includes(kitchenStatus)) kitchenStatus = 'ready';
   const reopened = kitchenStatus === 'new' && order.kitchen_status !== 'new';
   const finished = kitchenStatus === 'ready' && order.kitchen_status !== 'ready';
+  // Stock follows the menu item: steaks of any weight use the same recipe.
   const sold = new Map();
-  for (const id of new Set([...before.keys(), ...wanted.keys()])) sold.set(id, (wanted.get(id) ?? 0) - (before.get(id)?.qty ?? 0));
+  for (const id of new Set([...before.keys(), ...wanted.keys()])) {
+    const menuItemId = before.get(id)?.menu_item_id ?? weights.get(id)[0];
+    sold.set(menuItemId, (sold.get(menuItemId) ?? 0) + (wanted.get(id) ?? 0) - (before.get(id)?.qty ?? 0));
+  }
   let announceStockChanges;
 
   db.exec('SAVEPOINT order_write');
   try {
     const retained = new Set(lines.filter(l => l.id).map(l => l.id));
     for (const old of order.items) if (!retained.has(old.id)) db.prepare('DELETE FROM order_items WHERE id = ?').run(old.id);
-    const insertItem = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insertItem = db.prepare('INSERT INTO order_items (order_id, menu_item_id, name, unit_price_cents, qty, sends_to_kitchen, ready_qty, note, kitchen_ready_at, kitchen_started_at, grams) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const l of lines) {
       if (l.id) db.prepare('UPDATE order_items SET qty = ?, ready_qty = ?, note = ?, kitchen_ready_at = ?, kitchen_started_at = ? WHERE id = ?').run(l.qty, l.ready_qty, l.note ?? '', l.kitchen_ready_at, l.kitchen_started_at, l.id);
-      else insertItem.run(order.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, 0, '', l.kitchen_ready_at, l.kitchen_started_at);
+      else insertItem.run(order.id, l.menu_item_id, l.name, l.unit_price_cents, l.qty, l.sends_to_kitchen, 0, l.note, l.kitchen_ready_at, l.kitchen_started_at, l.grams);
     }
     const now = new Date().toISOString();
     db.prepare(

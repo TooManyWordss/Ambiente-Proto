@@ -16,7 +16,7 @@ import { logActivity } from '../sales/orders.js';
 import { app } from '../core/http.js';
 
 // Everything the tablet runs: the server, the built screens, and the start script. No .env, no databases.
-const PACKAGE_FILES = ['server.js', 'server', 'events.js', 'menu-catalog.js', 'menu-descriptions.js',
+const PACKAGE_FILES = ['server.js', 'server', 'events.js', 'menu-catalog.js', 'menu-descriptions.js', 'dining-domain.js', 'dining-server.js', 'weighed.js',
   'package.json', 'package-lock.json', 'dist', 'client/public', 'termux/start.sh'];
 const BACKUPS_KEPT = 10;
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');

@@ -36,4 +36,18 @@ if (menuVersion !== 'ambiente-2026-10-complete') {
     throw error;
   }
 }
+// Steaks sold by weight (Oct 29, 2026): the Wagyu drops "(per gram)" from its name, keeping its ID.
+if (getSetting('menu_weights_version', '') !== '2026-10-29') {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare("UPDATE menu_items SET name = 'Japanese Kobe A5 Wagyu Steak' WHERE name = 'Japanese Kobe A5 Wagyu Steak (per gram)' AND category = 'Beef / Chicken' AND active = 1").run();
+    const weigh = db.prepare('UPDATE menu_items SET per_grams = ?, sizes = ? WHERE name = ? AND category = ? AND active = 1');
+    for (const item of menuCatalog) if (item.perGrams) weigh.run(item.perGrams, item.sizes || null, item.name, item.category);
+    setSetting('menu_weights_version', '2026-10-29');
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
 }

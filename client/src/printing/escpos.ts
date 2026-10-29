@@ -92,6 +92,7 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   (r.items ?? []).forEach((i, n) => {
     if (n) p.gap(18);
     p.row(`${i.qty} x ${i.name ?? ''}`, peso((i.unit_price_cents ?? 0) * i.qty));
+    if (i.note) p.row(`    ${i.note}`, '');
     if (i.qty > 1) p.line(`    ${peso(i.unit_price_cents)} each`);
   });
   p.rule();
