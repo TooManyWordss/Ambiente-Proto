@@ -486,3 +486,7 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .picker-panel.picker-admin{grid-column:1/-1}
 .picker-all,.login-back{justify-self:center;text-align:center}
 @media(max-width:520px){.picker-panels{grid-template-columns:minmax(0,1fr)}}
+
+/* Kitchen printer: a banner when tickets are waiting to print or the printer needs connecting. */
+.kp-banner{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:10px 16px 0;padding:12px 14px;border:2px solid var(--warn);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);font-weight:700}
+.kp-banner span{flex:1 1 280px}.kp-banner-actions{display:flex;gap:6px;flex-wrap:wrap}

@@ -5,13 +5,15 @@
 //   ble   – straight from Chrome over Bluetooth Low Energy (only printers that offer BLE)
 
 export type PrintMethod = 'system' | 'rawbt' | 'usb' | 'ble';
-export type ReceiptLine = { name?: string; qty: number; unit_price_cents?: number };
+export type ReceiptLine = { name?: string; qty: number; unit_price_cents?: number; note?: string | null };
 export type ReceiptData = {
   label: string; station?: string; created_at?: string; items?: ReceiptLine[];
   subtotal_cents?: number; discount_cents?: number; discount_label?: string | null; tax_cents?: number; total_cents?: number;
   cash_tendered_cents?: number | null; change_cents?: number | null;
   table_name?: string | null; guests?: number | null; staff_name?: string | null;
   offline?: boolean; reprint?: boolean; test?: boolean;
+  // A kitchen slip for an order that changed after it was sent: "ORDER CHANGED", "CANCELLED".
+  banner?: string;
 };
 // A black-and-white picture for the printer: width in dots (a multiple of 8), one bit per dot, rows top to bottom.
 export type Bitmap = { width: number; height: number; data: Uint8Array };
@@ -107,8 +109,9 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   return p.done();
 }
 
-// The kitchen's copy when no kitchen screen is connected: a black KITCHEN ORDER band so it can't be
-// mistaken for a receipt, then what to cook, large and well spaced, with no prices.
+// The kitchen's copy (from the till when no kitchen screen is connected, or from the kitchen tablet's own
+// printer): a black KITCHEN ORDER band so it can't be mistaken for a receipt, then what to cook, large and
+// well spaced, with no prices.
 export function encodeKitchenSlip(r: ReceiptData, options: PrintOptions) {
   const p = new Receipt(options.columns);
   // Double width fits half the characters: the band is " KITCHEN ORDER " on 58 mm paper and up.
@@ -117,8 +120,14 @@ export function encodeKitchenSlip(r: ReceiptData, options: PrintOptions) {
   p.line([r.guests ? `${r.guests} guest${r.guests === 1 ? '' : 's'}` : '', r.label ? `Receipt #${r.label}` : ''].filter(Boolean).join(' - ')).line(clock(r.created_at));
   if (r.offline) p.line('Saved offline');
   if (r.reprint) p.line('*** REPRINT ***');
+  if (r.banner) p.bold(true).size(false, true).line(`*** ${r.banner} ***`).size(false, false).bold(false);
   p.align('left').rule('=').bold(true).size(false, true);
-  (r.items ?? []).forEach((i, n) => { if (n) p.gap(24); p.row(`${i.qty} x ${i.name ?? ''}`, ''); });
+  // A preparation note goes under its item in normal-size text; a line taken off a changed order says so.
+  (r.items ?? []).forEach((i, n) => {
+    if (n) p.gap(24);
+    p.row(i.qty ? `${i.qty} x ${i.name ?? ''}` : `REMOVED: ${i.name ?? ''}`, '');
+    if (i.note) p.size(false, false).bold(false).row(`   - ${i.note}`, '').bold(true).size(false, true);
+  });
   p.size(false, false).bold(false).rule('=');
   p.raw(LF, LF, LF, LF);
   if (options.cut) p.raw(GS, 0x56, 0x42, 0x00);
@@ -308,6 +317,16 @@ export async function connectPrinter(method: PrintMethod): Promise<string> {
     return attachBle(await bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES }));
   }
   return method === 'rawbt' ? 'RawBT app' : 'Print screen';
+}
+
+// Finds the printer used before on this tablet without a tap, where the browser allows it. Null if it can't.
+export async function reconnectPrinter(method: PrintMethod): Promise<string | null> {
+  if (method === 'ble') return bleTarget || await bleFromEarlier().catch(() => false) ? bleTarget!.name : null;
+  if (method === 'usb' && !usbDevice) {
+    const [known] = (await usbApi()?.getDevices?.().catch(() => [])) ?? [];
+    if (known) await openUsb(known).catch(() => null);
+  }
+  return connectedPrinter(method);
 }
 
 export function connectedPrinter(method: PrintMethod) {
