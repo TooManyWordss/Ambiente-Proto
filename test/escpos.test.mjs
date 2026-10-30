@@ -50,6 +50,9 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   const both = joinPrints(receipt, slip);
   assert.equal(both.length, receipt.length + slip.length);
   assert.ok(text(both).indexOf('Cash') < text(both).indexOf('KITCHEN'), 'receipt first, then the kitchen slip');
+  // The barista's slip has its own band, so the two stations' slips can't be mixed up.
+  const drinks = text(encodeKitchenSlip({ ...order, prep: 'barista', items: [{ name: 'Iced Latte', qty: 2 }] }, { columns: 32, cut: false, drawer: false }));
+  assert.ok(drinks.includes(' BARISTA ORDER ') && !drinks.includes('KITCHEN') && drinks.includes('2 x Iced Latte'));
 });
 
 test('Bluetooth printing finds the printer’s print channel and piece size, reconnects, and never prints twice', async () => {

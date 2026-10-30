@@ -14,6 +14,8 @@ export type ReceiptData = {
   offline?: boolean; reprint?: boolean; test?: boolean; heading?: string;
   // A kitchen slip for an order that changed after it was sent: "ORDER CHANGED", "CANCELLED".
   banner?: string;
+  // Whose slip it is: the kitchen's (food) or the barista's (drinks and desserts).
+  prep?: 'kitchen' | 'barista';
 };
 // A black-and-white picture for the printer: width in dots (a multiple of 8), one bit per dot, rows top to bottom.
 export type Bitmap = { width: number; height: number; data: Uint8Array };
@@ -114,13 +116,13 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   return p.done();
 }
 
-// The kitchen's copy (from the till when no kitchen screen is connected, or from the kitchen tablet's own
-// printer): a black KITCHEN ORDER band so it can't be mistaken for a receipt, then what to cook, large and
-// well spaced, with no prices.
+// The kitchen's or the barista's copy (from the till when that station's screen isn't connected, or from the
+// station tablet's own printer): a black KITCHEN ORDER or BARISTA ORDER band so it can't be mistaken for a
+// receipt or for the other station's slip, then what to make, large and well spaced, with no prices.
 export function encodeKitchenSlip(r: ReceiptData, options: PrintOptions) {
   const p = new Receipt(options.columns);
   // Double width fits half the characters: the band is " KITCHEN ORDER " on 58 mm paper and up.
-  p.align('center').bold(true).reverse(true).size(true, true).line(' KITCHEN ORDER ').size(false, false).reverse(false);
+  p.align('center').bold(true).reverse(true).size(true, true).line(r.prep === 'barista' ? ' BARISTA ORDER ' : ' KITCHEN ORDER ').size(false, false).reverse(false);
   p.size(false, true).line(r.table_name ?? 'Takeout').size(false, false).bold(false);
   p.line([r.guests ? `${r.guests} guest${r.guests === 1 ? '' : 's'}` : '', r.label ? `Receipt #${r.label}` : ''].filter(Boolean).join(' - ')).line(clock(r.created_at));
   if (r.offline) p.line('Saved offline');

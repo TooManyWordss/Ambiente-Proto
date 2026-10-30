@@ -8,10 +8,11 @@ import { ticketState } from '../../dining-domain.js';
 
 // ---------- Kitchen ----------
 
-// How many kitchen screens are open right now. With none, the till prints a paper kitchen slip.
-// It sits under /api/pos because everything under /api/kitchen is for the kitchen screen only.
+// How many kitchen and barista screens are open right now. A station with none gets its paper slip from
+// the till. It sits under /api/pos because everything under /api/kitchen is for the station screens only.
 app.get('/api/pos/kitchen-screens', (req, res) => {
-  res.json({ screens: screenCounts().kitchen });
+  const open = screenCounts();
+  res.json({ screens: open.kitchen, barista: open.barista });
 });
 
 // ---------- Ready to collect ----------

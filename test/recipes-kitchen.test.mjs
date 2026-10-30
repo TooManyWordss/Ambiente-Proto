@@ -181,12 +181,12 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
       assert.equal((await call('/api/pos/ready', kitchen)).status, 401);
     }
 
-    // The till can tell whether a kitchen screen is open, to know when to print a paper kitchen slip.
-    assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 0 });
+    // The till can tell whether the kitchen and barista screens are open, to know which paper slips to print.
+    assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 0, barista: 0 });
     assert.equal((await call('/api/pos/kitchen-screens', kitchen)).status, 401);
     const screen = connect(base, { extraHeaders: { cookie: kitchen }, auth: { store: 'ambiente' }, transports: ['websocket'] });
     await new Promise((resolve, reject) => { screen.on('connect', resolve); screen.on('connect_error', reject); });
-    assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 1 });
+    assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 1, barista: 0 });
     // The owner's live panel sees which screens are open.
     assert.deepEqual((await call('/api/admin/screens', owner)).body, { pos: 0, barista: 0, kitchen: 1, inventory: 0, admin: 0 });
     assert.equal((await call('/api/admin/screens', pos)).status, 401);

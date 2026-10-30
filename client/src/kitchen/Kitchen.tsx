@@ -21,8 +21,8 @@ const madeAt = (station: Station) => (i: Line) => i.sends_to_kitchen !== 0 && (i
 const openAt = (station: Station) => (o: Order) => ['new', 'preparing'].includes(o.kitchen_status) && o.items.some(i => madeAt(station)(i) && i.qty > 0 && !i.kitchen_ready_at);
 
 // What the station's printer prints for a counter order, and for a table's order (from the Unpaid tabs).
-const counterSlip = (o: Order, station: Station): KitchenSlip => ({ key: `order:${o.id}:${o.edit_count ?? 0}`, label: String(o.receipt_label ?? o.receipt_no), table_name: o.table_name ?? null, guests: o.guests ?? null, created_at: o.created_at, banner: o.edit_count ? 'ORDER CHANGED' : undefined, items: o.items.filter(madeAt(station)).map(i => ({ qty: i.qty, name: i.name, note: i.note })) });
-const tableSlip = (t: any): KitchenSlip => ({ key: `table:${t.submission.id}:${t.submission.change_seq ?? 0}`, label: '', table_name: t.title, guests: t.visit.guests, created_at: t.time, banner: t.status === 'cancelled' ? 'CANCELLED' : t.submission.change_seq ? 'ORDER CHANGED' : undefined, items: t.lines.filter((l: any) => l.sends_to_kitchen !== 0).map((l: any) => ({ qty: l.qty, name: l.name, note: l.note })) });
+const counterSlip = (o: Order, station: Station): KitchenSlip => ({ key: `order:${o.id}:${o.edit_count ?? 0}`, prep: station, label: String(o.receipt_label ?? o.receipt_no), table_name: o.table_name ?? null, guests: o.guests ?? null, created_at: o.created_at, banner: o.edit_count ? 'ORDER CHANGED' : undefined, items: o.items.filter(madeAt(station)).map(i => ({ qty: i.qty, name: i.name, note: i.note })) });
+const tableSlip = (t: any, station: Station): KitchenSlip => ({ key: `table:${t.submission.id}:${t.submission.change_seq ?? 0}`, prep: station, label: '', table_name: t.title, guests: t.visit.guests, created_at: t.time, banner: t.status === 'cancelled' ? 'CANCELLED' : t.submission.change_seq ? 'ORDER CHANGED' : undefined, items: t.lines.filter((l: any) => l.sends_to_kitchen !== 0).map((l: any) => ({ qty: l.qty, name: l.name, note: l.note })) });
 
 // Inside the owner's general terminal the display starts by itself: no tap-to-start cover, fullscreen or wake lock.
 export function Kitchen({ station = 'kitchen' }: { station?: Station }) {
@@ -30,8 +30,8 @@ export function Kitchen({ station = 'kitchen' }: { station?: Station }) {
   const {user,ready}=useSession(station),[tickets,setTickets]=useState<Order[]>([]),[started,setStarted]=useState(window.self!==window.top),[offline,setOffline]=useState(false),[now,setNow]=useState(Date.now()),[tableTickets,setTableTickets]=useState(0),[historyOpen,setHistoryOpen]=useState(false),[tableSlips,setTableSlips]=useState<KitchenSlip[]>([]),[printerOpen,setPrinterOpen]=useState(false);
   const load=useCallback(()=>api<Order[]>(`/api/kitchen/tickets?station=${station}`).then(setTickets).catch(()=>{}),[station]);
   const event=useCallback((name:string,o:any)=>{const put=(v:Order[])=>[...v.filter(x=>x.id!==o.id),o].sort((a,b)=>a.id-b.id);if(name==='order.created'&&open(o)){setTickets(put);if(started)chime();}if(name==='order.updated'||name==='ticket.updated'){setTickets(v=>o.status==='voided'||!open(o)?v.filter(x=>x.id!==o.id):put(v));if(name==='order.updated'&&started&&open(o))chime();}},[started,station]);
-  const onTableTickets=useCallback((list:any[])=>setTableSlips(list.filter(t=>t.submission).map(tableSlip)),[]);
-  const printing=useKitchenPrinting([...tickets.filter(open).map(o=>counterSlip(o,station)),...tableSlips].filter(s=>s.items?.length),started);
+  const onTableTickets=useCallback((list:any[])=>setTableSlips(list.filter(t=>t.submission).map(t=>tableSlip(t,station))),[station]);
+  const printing=useKitchenPrinting([...tickets.filter(open).map(o=>counterSlip(o,station)),...tableSlips].filter(s=>s.items?.length),started,station);
   const state=useLive(event);useEffect(()=>{void load();const id=setInterval(()=>setNow(Date.now()),30000);return()=>clearInterval(id);},[load]);
   async function begin(){setStarted(true);chime();void printing.wake();try{await document.documentElement.requestFullscreen?.();}catch{}try{await navigator.wakeLock?.request('screen');}catch{}}
   async function update(o:Order,next:string){try{await api(`/api/orders/${o.id}/kitchen`,{method:'PATCH',body:{status:next,station}});await load();}catch(e){alert((e as Error).message);}}

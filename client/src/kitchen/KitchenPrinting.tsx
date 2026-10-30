@@ -18,7 +18,7 @@ export type KitchenPrinting = ReturnType<typeof useKitchenPrinting>;
 // The kitchen tablet's own receipt printer: every new ticket prints as it arrives (once the display has
 // been started), and again marked "ORDER CHANGED" or "CANCELLED" when it changes. If the printer can't
 // be reached, the tickets wait and the cook sees a banner to connect it and print them.
-export function useKitchenPrinting(slips: KitchenSlip[], started: boolean) {
+export function useKitchenPrinting(slips: KitchenSlip[], started: boolean, station: 'kitchen' | 'barista' = 'kitchen') {
   const [settings, setSettings] = useState<Settings>(() => read(settingsKey(), DEFAULTS));
   const [printer, setPrinter] = useState<string | null>(null), [failed, setFailed] = useState<{ slips: KitchenSlip[]; message: string } | null>(null), [busy, setBusy] = useState(false);
   const live = useRef(settings); live.current = settings;
@@ -73,19 +73,19 @@ export function useKitchenPrinting(slips: KitchenSlip[], started: boolean) {
     catch (e) { if ((e as Error).name !== 'NotFoundError') setFailed((f) => ({ slips: f?.slips ?? [], message: (e as Error).message })); }
     finally { setBusy(false); }
   };
-  const test = () => send([{ key: `test:${Date.now()}`, label: '', table_name: 'Printer test', created_at: new Date().toISOString(), items: [{ qty: 1, name: 'The kitchen printer works' }] }]).then(() => { /* a test isn't a ticket */ });
+  const test = () => send([{ key: `test:${Date.now()}`, label: '', table_name: 'Printer test', created_at: new Date().toISOString(), prep: station, items: [{ qty: 1, name: `The ${station} printer works` }] }]).then(() => { /* a test isn't a ticket */ });
   const skip = () => { if (failed) markPrinted(failed.slips.map((s) => s.key)); setFailed(null); };
-  return { settings, save, printer, failed, busy, connect, test, skip, wake };
+  return { settings, save, printer, failed, busy, connect, test, skip, wake, station };
 }
 
 // Shown above the tickets when printing is on but the printer needs a tap, or tickets didn't print.
 export function KitchenPrintBanner({ printing, started }: { printing: KitchenPrinting; started: boolean }) {
-  const { settings, printer, failed, busy, connect, skip } = printing;
+  const { settings, printer, failed, busy, connect, skip, station } = printing;
   if (!settings.on || !started) return null;
   const waiting = failed?.slips.filter((s) => !s.key.startsWith('test:')).length ?? 0;
   if (!failed && printer) return null;
   return <div className="kp-banner" role="alert">
-    <span>{failed ? `${waiting ? `${waiting} ${waiting === 1 ? 'ticket' : 'tickets'} didn’t print. ` : 'The test didn’t print. '}${failed.message}` : 'The kitchen printer isn’t connected, so new tickets won’t print.'}</span>
+    <span>{failed ? `${waiting ? `${waiting} ${waiting === 1 ? 'ticket' : 'tickets'} didn’t print. ` : 'The test didn’t print. '}${failed.message}` : `The ${station} printer isn’t connected, so new tickets won’t print.`}</span>
     <div className="kp-banner-actions">
       <button className="btn primary small" disabled={busy} onClick={() => void connect()}>{waiting ? 'Connect printer & print' : 'Connect printer'}</button>
       {failed && <button className="btn ghost small" onClick={skip}>{waiting ? 'Don’t print them' : 'Dismiss'}</button>}
@@ -94,10 +94,10 @@ export function KitchenPrintBanner({ printing, started }: { printing: KitchenPri
 }
 
 export function KitchenPrinterSettings({ printing, onClose }: { printing: KitchenPrinting; onClose: () => void }) {
-  const { settings, save, printer, busy, connect, test, failed } = printing;
-  return <Dialog title="Kitchen printer" onClose={onClose}>
+  const { settings, save, printer, busy, connect, test, failed, station } = printing;
+  return <Dialog title={station === 'barista' ? 'Barista printer' : 'Kitchen printer'} onClose={onClose}>
     <label className="check"><input type="checkbox" checked={settings.on} onChange={(e) => save({ ...settings, on: e.target.checked })} /> Print every new order as it arrives</label>
-    <p className="hint">Each ticket prints once, with the table and what to cook. A changed or cancelled order prints again, marked so. Tickets already on the screen when you switch this on don’t print.</p>
+    <p className="hint">Each ticket prints once, with the table and what to {station === 'barista' ? 'make' : 'cook'}. A changed or cancelled order prints again, marked so. Tickets already on the screen when you switch this on don’t print.</p>
     <label>Printer type<select value={settings.method} onChange={(e) => save({ ...settings, method: e.target.value as Settings['method'] })}>
       <option value="ble">Bluetooth (Chrome)</option>
       <option value="usb">USB cable (Chrome)</option>
