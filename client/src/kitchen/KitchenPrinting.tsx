@@ -5,8 +5,10 @@ import { Dialog } from '../shared/ui';
 
 // One printout for the kitchen. The key changes when the order changes, so a changed order prints again.
 export type KitchenSlip = ReceiptData & { key: string };
-type Settings = { on: boolean; method: 'ble' | 'usb'; paper: '58' | '80'; cut: boolean };
-const DEFAULTS: Settings = { on: false, method: 'ble', paper: '58', cut: false };
+// Printing is on unless switched off: every order that arrives on the screen prints. `since` is when it was
+// switched on; orders already waiting then don't print, so a tablet doesn't print a pile of old tickets.
+type Settings = { on: boolean; method: 'ble' | 'usb'; paper: '58' | '80'; cut: boolean; since?: string };
+const DEFAULTS: Settings = { on: true, method: 'ble', paper: '58', cut: false };
 // What has printed is remembered for a week, so a reload doesn't print it again.
 const KEEP_MS = 7 * 86_400_000;
 const settingsKey = () => storageKey('kitchenPrint'), printedKey = () => storageKey('kitchenPrinted');
@@ -15,11 +17,15 @@ function write(key: string, value: unknown) { try { localStorage.setItem(key, JS
 
 export type KitchenPrinting = ReturnType<typeof useKitchenPrinting>;
 
-// The kitchen tablet's own receipt printer: every new ticket prints as it arrives (once the display has
+// The kitchen or barista tablet's own receipt printer: every new ticket prints as it arrives (once the display has
 // been started), and again marked "ORDER CHANGED" or "CANCELLED" when it changes. If the printer can't
 // be reached, the tickets wait and the cook sees a banner to connect it and print them.
 export function useKitchenPrinting(slips: KitchenSlip[], started: boolean, station: 'kitchen' | 'barista' = 'kitchen') {
-  const [settings, setSettings] = useState<Settings>(() => read(settingsKey(), DEFAULTS));
+  const [settings, setSettings] = useState<Settings>(() => {
+    const s = read(settingsKey(), DEFAULTS);
+    if (s.on && !s.since) { s.since = new Date().toISOString(); write(settingsKey(), s); }
+    return s;
+  });
   const [printer, setPrinter] = useState<string | null>(null), [failed, setFailed] = useState<{ slips: KitchenSlip[]; message: string } | null>(null), [busy, setBusy] = useState(false);
   const live = useRef(settings); live.current = settings;
   const printed = useRef<Record<string, number> | null>(null), tried = useRef(new Set<string>()), queue = useRef<Promise<void>>(Promise.resolve());
@@ -49,17 +55,19 @@ export function useKitchenPrinting(slips: KitchenSlip[], started: boolean, stati
   const signature = slips.map((s) => s.key).join('|');
   useEffect(() => {
     if (!started || !settings.on) return;
-    const fresh = slips.filter((s) => !printed.current![s.key] && !tried.current.has(s.key));
+    // A changed or cancelled order prints even if it first arrived before printing was switched on.
+    const fresh = slips.filter((s) => !printed.current![s.key] && !tried.current.has(s.key) && (s.banner || !settings.since || (s.created_at ?? '') >= settings.since));
     if (!fresh.length) return;
     fresh.forEach((s) => tried.current.add(s.key));
     void send(fresh);
-  }, [signature, started, settings.on, send]);
+  }, [signature, started, settings.on, settings.since, send]);
 
   // After a reload, finds the printer again without a tap where the browser allows it.
   const wake = useCallback(async () => { if (live.current.on) setPrinter(await reconnectPrinter(live.current.method)); }, []);
-  const save = (next: Settings) => {
+  const save = (change: Settings) => {
+    let next = change;
     // Switching it on prints only what arrives from now on, not the tickets already on the screen.
-    if (next.on && !live.current.on) markPrinted(slips.map((s) => s.key));
+    if (next.on && !live.current.on) { markPrinted(slips.map((s) => s.key)); next = { ...next, since: new Date().toISOString() }; }
     const lookAgain = next.on && (!live.current.on || next.method !== live.current.method);
     if (next.method !== live.current.method) setPrinter(null);
     live.current = next; setSettings(next); write(settingsKey(), next);
