@@ -17,10 +17,15 @@ function write(key: string, value: unknown) { try { localStorage.setItem(key, JS
 
 export type KitchenPrinting = ReturnType<typeof useKitchenPrinting>;
 
-// The kitchen or barista tablet's own receipt printer: every new ticket prints as it arrives (once the display has
-// been started), and again marked "ORDER CHANGED" or "CANCELLED" when it changes. If the printer can't
+// A ticket that shows up here well after it was placed came while this tablet or the till was offline, and the
+// till printed it on paper then. It still prints here, marked late, so the cook checks before making it twice.
+const LATE_MS = 90_000;
+const lateness = (s: KitchenSlip): KitchenSlip => !s.banner && Date.now() - Date.parse(s.created_at ?? '') > LATE_MS ? { ...s, late: true } : s;
+
+// The kitchen or barista tablet's own receipt printer: every new ticket prints as it arrives (from the moment the
+// screen opens), and again marked "ORDER CHANGED" or "CANCELLED" when it changes. If the printer can't
 // be reached, the tickets wait and the cook sees a banner to connect it and print them.
-export function useKitchenPrinting(slips: KitchenSlip[], started: boolean, station: 'kitchen' | 'barista' = 'kitchen') {
+export function useKitchenPrinting(slips: KitchenSlip[], active: boolean, station: 'kitchen' | 'barista' = 'kitchen') {
   const [settings, setSettings] = useState<Settings>(() => {
     const s = read(settingsKey(), DEFAULTS);
     if (s.on && !s.since) { s.since = new Date().toISOString(); write(settingsKey(), s); }
@@ -54,13 +59,13 @@ export function useKitchenPrinting(slips: KitchenSlip[], started: boolean, stati
 
   const signature = slips.map((s) => s.key).join('|');
   useEffect(() => {
-    if (!started || !settings.on) return;
+    if (!active || !settings.on) return;
     // A changed or cancelled order prints even if it first arrived before printing was switched on.
     const fresh = slips.filter((s) => !printed.current![s.key] && !tried.current.has(s.key) && (s.banner || !settings.since || (s.created_at ?? '') >= settings.since));
     if (!fresh.length) return;
     fresh.forEach((s) => tried.current.add(s.key));
-    void send(fresh);
-  }, [signature, started, settings.on, settings.since, send]);
+    void send(fresh.map(lateness));
+  }, [signature, active, settings.on, settings.since, send]);
 
   // After a reload, finds the printer again without a tap where the browser allows it.
   const wake = useCallback(async () => { if (live.current.on) setPrinter(await reconnectPrinter(live.current.method)); }, []);
@@ -87,9 +92,9 @@ export function useKitchenPrinting(slips: KitchenSlip[], started: boolean, stati
 }
 
 // Shown above the tickets when printing is on but the printer needs a tap, or tickets didn't print.
-export function KitchenPrintBanner({ printing, started }: { printing: KitchenPrinting; started: boolean }) {
+export function KitchenPrintBanner({ printing, active }: { printing: KitchenPrinting; active: boolean }) {
   const { settings, printer, failed, busy, connect, skip, station } = printing;
-  if (!settings.on || !started) return null;
+  if (!settings.on || !active) return null;
   const waiting = failed?.slips.filter((s) => !s.key.startsWith('test:')).length ?? 0;
   if (!failed && printer) return null;
   return <div className="kp-banner" role="alert">

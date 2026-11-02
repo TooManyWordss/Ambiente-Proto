@@ -1,9 +1,9 @@
 import { screenPath, storageKey, storeUrl, STORE } from './store';
 import type { Role } from './types';
 
-export async function api<T = any>(url: string, options: { method?: string; body?: unknown; form?: FormData; redirectOnUnauthorized?: boolean } = {}): Promise<T> {
+export async function api<T = any>(url: string, options: { method?: string; body?: unknown; form?: FormData; redirectOnUnauthorized?: boolean; timeoutMs?: number } = {}): Promise<T> {
   const headers: HeadersInit = options.form ? {} : options.body ? { 'Content-Type': 'application/json' } : {};
-  const response = await fetch(storeUrl(url), { method: options.method ?? 'GET', credentials: 'same-origin', headers, body: options.form ?? (options.body ? JSON.stringify(options.body) : undefined) });
+  const response = await fetch(storeUrl(url), { method: options.method ?? 'GET', credentials: 'same-origin', headers, body: options.form ?? (options.body ? JSON.stringify(options.body) : undefined), signal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) {
     if (options.redirectOnUnauthorized !== false) { clearCachedSessions(); location.href = storeUrl(`/login?role=${roleFromPath()}`); }

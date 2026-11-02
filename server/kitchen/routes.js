@@ -3,15 +3,15 @@ import { currentStore } from '../core/config.js';
 import { db } from '../core/db.js';
 import { dayRange } from '../core/dates.js';
 import { attachItems, loadOrder } from '../sales/orders.js';
-import { app, screenCounts, storeBroadcast } from '../core/http.js';
+import { answeringScreens, app, storeBroadcast } from '../core/http.js';
 import { ticketState } from '../../dining-domain.js';
 
 // ---------- Kitchen ----------
 
-// How many kitchen and barista screens are open right now. A station with none gets its paper slip from
+// How many kitchen and barista screens answer right now. A station with none gets its paper slip from
 // the till. It sits under /api/pos because everything under /api/kitchen is for the station screens only.
-app.get('/api/pos/kitchen-screens', (req, res) => {
-  const open = screenCounts();
+app.get('/api/pos/kitchen-screens', async (req, res) => {
+  const open = await answeringScreens(['kitchen', 'barista']);
   res.json({ screens: open.kitchen, barista: open.barista });
 });
 

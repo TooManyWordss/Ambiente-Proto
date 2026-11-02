@@ -38,7 +38,7 @@ type Service = ReturnType<typeof useDining>;
 function SyncNotice({ service }: { service: Service }) {
   return <div className={`dining-sync ${service.online ? '' : 'offline'}`} role="status"><span className={`pill ${service.online ? 'ready' : 'void'}`}>{service.online ? 'Connected' : 'Offline / connecting'}</span>
     <span>{service.cache?.queue.length ?? 0} unsynced action(s)</span><button className="btn small" onClick={() => void service.sync()}>Sync now</button>
-    {!service.online && <p>Saved on this tablet. Tell the kitchen directly; bills stay provisional until they sync.</p>}
+    {!service.online && <p>Saved on this tablet. {service.role === 'pos' ? 'The kitchen and barista slips print at the till; take them over.' : 'Tell the kitchen directly.'} Bills stay provisional until they sync.</p>}
     {service.error && <p className="dining-error" role="alert">{service.error}</p>}
     {!!service.cache?.queue.some(q => q.status === 'conflict') && <p className="dining-error">Some actions need owner review. Their original details and recorded cash are retained below.</p>}
   </div>;
@@ -109,6 +109,7 @@ function Visit({ visit: v, service }: { visit: any; service: Service }) {
 function PartyForm({ visit, service, done }: { visit: any; service: Service; done: () => void }) {
   return <form className="panel dining-form" onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void service.act('visit.details', visit.id, { guests: Number(f.get('guests')), alias: f.get('alias'), vip: f.has('vip'), repeat: f.has('repeat') }); done(); }}><label>Guests<input name="guests" type="number" min="1" max="999" defaultValue={visit.guests} required/></label><label>Alias<input name="alias" maxLength={80} defaultValue={visit.alias}/></label><label className="check"><input name="vip" type="checkbox" defaultChecked={visit.vip}/>VIP</label><label className="check"><input name="repeat" type="checkbox" defaultChecked={visit.repeat}/>Repeat guest</label><button className="btn primary">Save party</button></form>;
 }
+// Sending tells the till, which prints paper slips for any station it can't reach.
 function OrderDraft({ visit, service }: { visit: any; service: Service }) {
   const draft = useDraft<any[]>(`order:${visit.id}`, [], service.cache!), [query, setQuery] = useState(''), [noteAt, setNoteAt] = useState<number | null>(null), [weighing, setWeighing] = useState<any>(null);
   // A steak sold by weight is weighed first, and each steak is its own line.
@@ -118,7 +119,7 @@ function OrderDraft({ visit, service }: { visit: any; service: Service }) {
     {weighing && <WeighDialog item={weighing} onAdd={grams => add(weighing, grams)} onClose={() => setWeighing(null)}/>}
     {draft.value.map((l, i) => <div className="dining-draft-line" key={l.id}><b>{l.name}</b><label>Quantity<input type="number" min="1" max="99" value={l.qty} onChange={e => draft.save(draft.value.map((x, n) => n === i ? { ...x, qty: Number(e.target.value) } : x))}/></label><label>Preparation note<input maxLength={300} value={l.note} onChange={e => draft.save(draft.value.map((x, n) => n === i ? { ...x, note: e.target.value } : x))}/></label><button className="btn small" onClick={() => setNoteAt(i)}>Quick notes</button><button className="btn small" onClick={() => draft.save(draft.value.filter((_, n) => n !== i))}>Remove</button></div>)}
     {noteAt != null && draft.value[noteAt] && <LineNoteDialog name={draft.value[noteAt].name} note={draft.value[noteAt].note} onSave={note => draft.save(draft.value.map((x, n) => n === noteAt ? { ...x, note } : x))} onClose={() => setNoteAt(null)}/>}
-    <div className="dining-actions"><button className="btn" disabled={!draft.canUndo} onClick={draft.undo}>Undo draft</button><button className="btn" onClick={() => draft.save([])}>Clear draft</button><button className="btn primary" disabled={!draft.value.length || service.busy} onClick={() => void service.run(async () => { await enqueue(serviceRole(service), 'visit.submit', visit.id, { submissionId: uid(), lines: draft.value }); draft.save([]); void service.sync(); })}>Send order to kitchen</button></div>{draft.error && <p role="alert">{draft.error}</p>}
+    <div className="dining-actions"><button className="btn" disabled={!draft.canUndo} onClick={draft.undo}>Undo draft</button><button className="btn" onClick={() => draft.save([])}>Clear draft</button><button className="btn primary" disabled={!draft.value.length || service.busy} onClick={() => void service.run(async () => { await enqueue(serviceRole(service), 'visit.submit', visit.id, { submissionId: uid(), lines: draft.value }); window.dispatchEvent(new CustomEvent('dining.sent', { detail: { table_name: visit.table_name, guests: visit.guests, created_at: new Date().toISOString(), offline: !service.online, items: draft.value } })); draft.save([]); void service.sync(); })}>Send order to kitchen</button></div>{draft.error && <p role="alert">{draft.error}</p>}
   </section>;
 }
 // The authenticated role is attached by the host, rather than inferred from a cached record.

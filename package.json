@@ -7,7 +7,7 @@
   "main": "server.js",
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.mjs",
-    "test:browser": "npm run build && node --test test/dining-browser.mjs",
+    "test:browser": "npm run build && node --test test/dining-browser.mjs test/printing-browser.mjs",
     "typecheck": "tsc --noEmit",
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "concurrently -k \"node --watch --env-file-if-exists=.env server.js\" \"vite --config vite.config.ts\"",

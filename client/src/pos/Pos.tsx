@@ -30,6 +30,8 @@ const parseLine = (key:string) => { const [id,grams]=key.split('@'); return {id:
 // The kitchen cooks the food and the barista makes the drinks and desserts; each gets its own paper slip.
 type Prep = 'kitchen' | 'barista';
 const PREPS: Prep[] = ['kitchen', 'barista'];
+// On wifi that's connected but not getting through, a sale waits this long before it's saved on the tablet instead.
+const SEND_MS = 10_000;
 const slipWords = (slips:Prep[]) => slips.length>1 ? 'Kitchen and barista slips' : slips[0]==='barista' ? 'Barista slip' : 'Kitchen slip';
 
 export function Pos({ role }: { role: 'pos' | 'barista' }) {
@@ -85,12 +87,12 @@ export function Pos({ role }: { role: 'pos' | 'barista' }) {
   const prepLines = (o:any, at:Prep) => (o?.items??[]).filter((i:Line)=>i.sends_to_kitchen!==0&&(i.station??'kitchen')===at);
   const slipsFor = (o:any) => PREPS.filter(at=>prepLines(o,at).length);
   // A station's paper slip prints when the till is set to always print them, or when that station's screen
-  // isn't open (including when this till can't reach the café server at all).
+  // doesn't answer (including when this till can't reach the café server at all, or the wifi is too weak to).
   const slipsNeeded = async (o:any, reachable:boolean):Promise<Prep[]> => {
     const wanted=slipsFor(o);
     if (kitchenSlip==='never' || !wanted.length) return [];
     if (kitchenSlip==='always' || !reachable) return wanted;
-    try { const open=await api<{screens:number;barista:number}>('/api/pos/kitchen-screens',{redirectOnUnauthorized:false}); return wanted.filter(at=>!(at==='barista'?open.barista:open.screens)); } catch { return wanted; }
+    try { const open=await api<{screens:number;barista:number}>('/api/pos/kitchen-screens',{redirectOnUnauthorized:false,timeoutMs:SEND_MS}); return wanted.filter(at=>!(at==='barista'?open.barista:open.screens)); } catch { return wanted; }
   };
   // ESC/POS printers get the receipt and/or kitchen slip as one job of printer commands. If that fails,
   // the cashier sees why and chooses: connect the printer and print, use the print screen, or skip.
@@ -115,6 +117,10 @@ export function Pos({ role }: { role: 'pos' | 'barista' }) {
     window.setTimeout(()=>window.print(),50);
   };
   const sendReceipt = (o:any) => sendPrint(o);
+  // A table's order sent from Unpaid tabs gets its paper slips the same way.
+  const diningSent = useRef<(o:any)=>void>(()=>{});
+  diningSent.current = (o:any) => void slipsNeeded(o,!o.offline).then(slips=>{ if(!slips.length) return; setLastReceipt(o); void sendPrint(o,{receipt:false,slips}); notify(`${slipWords(slips)} printed for ${o.table_name}`); });
+  useEffect(() => { const sent=(e:Event)=>diningSent.current((e as CustomEvent).detail); window.addEventListener('dining.sent',sent); return ()=>window.removeEventListener('dining.sent',sent); }, []);
   const printReceipt = (o:any, reprint=false) => { setLastReceipt({...o,reprint}); void sendReceipt({...o,reprint}); };
   // A table's orders paid together print as their one receipt.
   const printOrder = async (o:Order) => { if(!o.bill_id) return printReceipt(o,true); try { const b=await api<any>(`/api/bills/${encodeURIComponent(o.bill_id)}`); printReceipt({...b,receipt_label:b.labels.join(', ')},true); } catch(e) { notify((e as Error).message); } };
@@ -134,7 +140,7 @@ export function Pos({ role }: { role: 'pos' | 'barista' }) {
     setSaving(true); const createdAt=new Date().toISOString(); const order={clientId:rid(),station,createdAt,cashTenderedCents:paid,discount:manualDiscount,items:cartLines.map(l=>({menuItemId:l.item.id,qty:l.qty,note:l.note,...(l.grams!=null?{grams:l.grams}:{})})),...(table?{table:{tableId:table.id,guests:table.guests,customerTag:table.tag,seatedAt:table.seatedAt}}:{})};
     const draft={receipt_no:null,station,created_at:createdAt,table_name:table?.name??null,guests:table?.guests??null,subtotal_cents:subtotal,discount_cents:bill.discount_cents,discount_json:JSON.stringify(manualDiscount),tax_cents:tax,total_cents:total,cash_tendered_cents:paid,change_cents:change,staff_name:user?.name,items:cartLines.map(l=>({name:l.name,qty:l.qty,unit_price_cents:l.price,sends_to_kitchen:prepStation(l.item)?1:0,station:prepStation(l.item),note:l.note,grams:l.grams}))};
     cartHistory.current=[];discountHistory.current=[];setManualDiscount(null);setCart({}); setCash(''); setTable(null); setStatus('Sending…');
-    try { const saved=await api<Order>('/api/orders',{method:'POST',body:order}); setStatus(`Receipt #${formatReceipt(saved)} · Change ${money(saved.change_cents ?? change)}`); offerReceipt(saved, await slipsNeeded(saved,true)); void loadToday(); }
+    try { const saved=await api<Order>('/api/orders',{method:'POST',body:order,timeoutMs:SEND_MS}); setStatus(`Receipt #${formatReceipt(saved)} · Change ${money(saved.change_cents ?? change)}`); offerReceipt(saved, await slipsNeeded(saved,true)); void loadToday(); }
     catch(e) { const err=e as Error & {status?:number}; if(!err.status || err.status>=500) { const next=[...pendingOrders,{...order,draft}]; setPendingOrders(next); localStorage.setItem(storageKey(`pending.${station}`),JSON.stringify(next)); setStatus(`Change ${money(change)} · No connection — sale saved. Give the kitchen the printed slip.`); offerReceipt({...draft,offline:true}, await slipsNeeded(draft,false)); } else { setCart(Object.fromEntries(order.items.map(i=>[lineOf(i.menuItemId,i.grams),i.qty])));setNotes(Object.fromEntries(order.items.filter(i=>i.note).map(i=>[lineOf(i.menuItemId,i.grams),i.note])));setManualDiscount(order.discount);setTable(table);setCash((paid/100).toFixed(2));setStatus(`Not sent: ${err.message}`); } }
     finally { setSaving(false); }
   }
@@ -145,7 +151,7 @@ export function Pos({ role }: { role: 'pos' | 'barista' }) {
     cartHistory.current=[];setCart({});setCash('');setTable(null);setStatus('Sending…');
     // Only the kitchen and barista slips print now; the customer's receipt prints when they pay.
     const slip=(o:any,slips:Prep[])=>{if(!slips.length)return;setLastReceipt(o);void sendPrint(o,{receipt:false,slips});};
-    try { const saved=await api<Order>('/api/orders',{method:'POST',body:order}); setStatus(`Order #${formatReceipt(saved)} sent to ${sentTo} · ${money(saved.total_cents)} added to their bill`); slip(saved,await slipsNeeded(saved,true)); setStep('seats'); void loadToday(); void loadTables(); }
+    try { const saved=await api<Order>('/api/orders',{method:'POST',body:order,timeoutMs:SEND_MS}); setStatus(`Order #${formatReceipt(saved)} sent to ${sentTo} · ${money(saved.total_cents)} added to their bill`); slip(saved,await slipsNeeded(saved,true)); setStep('seats'); void loadToday(); void loadTables(); }
     catch(e) { const err=e as Error & {status?:number}; if(!err.status || err.status>=500) { const next=[...pendingOrders,{...order,draft}]; setPendingOrders(next); localStorage.setItem(storageKey(`pending.${station}`),JSON.stringify(next)); setStatus(`No connection — ${sentTo}'s order is saved on this device and sends by itself. Give the kitchen the printed slip.`); slip({...draft,offline:true},await slipsNeeded(draft,false)); setStep('seats'); } else { setCart(Object.fromEntries(order.items.map(i=>[lineOf(i.menuItemId,i.grams),i.qty])));setNotes(Object.fromEntries(order.items.filter(i=>i.note).map(i=>[lineOf(i.menuItemId,i.grams),i.note])));setTable(table);setStatus(`Not sent: ${err.message}`); } }
     finally { setSaving(false); }
   }

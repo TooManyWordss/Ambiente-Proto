@@ -16,6 +16,8 @@ export type ReceiptData = {
   banner?: string;
   // Whose slip it is: the kitchen's (food) or the barista's (drinks and desserts).
   prep?: 'kitchen' | 'barista';
+  // A station ticket that reached its tablet late, while the till couldn't see the station: the till printed it then.
+  late?: boolean;
 };
 // A black-and-white picture for the printer: width in dots (a multiple of 8), one bit per dot, rows top to bottom.
 export type Bitmap = { width: number; height: number; data: Uint8Array };
@@ -127,6 +129,7 @@ export function encodeKitchenSlip(r: ReceiptData, options: PrintOptions) {
   p.line([r.guests ? `${r.guests} guest${r.guests === 1 ? '' : 's'}` : '', r.label ? `Receipt #${r.label}` : ''].filter(Boolean).join(' - ')).line(clock(r.created_at));
   if (r.offline) p.line('Saved offline');
   if (r.reprint) p.line('*** REPRINT ***');
+  if (r.late) p.bold(true).line('LATE - check for a till slip').bold(false);
   if (r.banner) p.bold(true).size(false, true).line(`*** ${r.banner} ***`).size(false, false).bold(false);
   p.align('left').rule('=').bold(true).size(false, true);
   // A preparation note goes under its item in normal-size text; a line taken off a changed order says so.

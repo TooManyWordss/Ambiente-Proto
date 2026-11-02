@@ -46,6 +46,8 @@ export function useLive(onEvent?: (event: string, data: any) => void) {
     const socket: Socket = io({ withCredentials: true, auth: { store: STORE, screen: roleFromPath() } });
     socket.on('connect', () => setState('Live'));
     socket.on('disconnect', () => setState('Offline'));
+    // The server asks before the till decides whether to print a paper slip: a screen that answers is really there.
+    socket.on('screen.check', (answer?: () => void) => answer?.());
     socket.on('connect_error', (e) => { setState('Offline'); if (e.message === 'unauthorized') { clearCachedSessions(); location.href = storeUrl(`/login?role=${roleFromPath()}`); } });
     const events = ['order.created','order.updated','ticket.updated','menu.requested','menu.updated','inventory.updated','inventory.low','security.updated','stores.updated','tables.updated','dining.updated','screens.updated','pickup.updated'];
     events.forEach((event) => socket.on(event, (data) => { if(['dining.updated','tables.updated','order.created','order.updated','ticket.updated','pickup.updated'].includes(event)) window.dispatchEvent(new Event('dining.live')); onEvent?.(event, data); }));

@@ -186,6 +186,10 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     assert.equal((await call('/api/pos/kitchen-screens', kitchen)).status, 401);
     const screen = connect(base, { extraHeaders: { cookie: kitchen }, auth: { store: 'ambiente' }, transports: ['websocket'] });
     await new Promise((resolve, reject) => { screen.on('connect', resolve); screen.on('connect_error', reject); });
+    // A screen counts for the till only if it answers now: one whose wifi dropped is still connected on the
+    // server for a while, but it doesn't answer, so the till prints its slip.
+    assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 0, barista: 0 });
+    screen.on('screen.check', (answer) => answer());
     assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 1, barista: 0 });
     // The owner's live panel sees which screens are open.
     assert.deepEqual((await call('/api/admin/screens', owner)).body, { pos: 0, barista: 0, kitchen: 1, inventory: 0, admin: 0 });

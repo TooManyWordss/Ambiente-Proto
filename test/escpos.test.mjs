@@ -53,6 +53,9 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   // The barista's slip has its own band, so the two stations' slips can't be mixed up.
   const drinks = text(encodeKitchenSlip({ ...order, prep: 'barista', items: [{ name: 'Iced Latte', qty: 2 }] }, { columns: 32, cut: false, drawer: false }));
   assert.ok(drinks.includes(' BARISTA ORDER ') && !drinks.includes('KITCHEN') && drinks.includes('2 x Iced Latte'));
+  // A ticket that reached the station late says so: the till may already have printed it on paper.
+  assert.ok(text(encodeKitchenSlip({ ...order, late: true }, { columns: 32, cut: false, drawer: false })).includes('LATE - check for a till slip'));
+  assert.ok(!text(slip).includes('LATE'));
 });
 
 test('Bluetooth printing finds the printer’s print channel and piece size, reconnects, and never prints twice', async () => {
