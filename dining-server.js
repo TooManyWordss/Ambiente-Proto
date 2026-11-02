@@ -92,9 +92,12 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     if (!Number.isFinite(Date.parse(op.at))) throw new DiningError('Invalid operation time');
   }
   const viewOperation = row => ({ ...row, operation: JSON.parse(row.operation), changes: JSON.parse(row.changes ?? '[]'), result: JSON.parse(row.result ?? 'null'), resolution: JSON.parse(row.resolution ?? 'null') });
+  // A settled table bill takes what its dishes use out of stock, as a till sale does.
+  const soldIn = (order, sign) => { const sold = new Map(); for (const l of order.items) sold.set(l.menu_item_id, (sold.get(l.menu_item_id) ?? 0) + sign * l.qty); return sold; };
   function apply(req, op) {
     validateEnvelope(op);
-    return transaction(() => {
+    let announceStockChanges = () => {};
+    const outcome = transaction(() => {
       const existing = db.prepare('SELECT * FROM dining_operations WHERE id = ?').get(op.id);
       if (existing) {
         if (existing.operation !== JSON.stringify(op)) throw new DiningError('Operation ID was reused with different content', 409);
@@ -117,6 +120,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
         if (op.type === 'visit.settle') {
           const id = receipt(req, after.visits[op.targetId], op);
           result = { receipt: loadOrder(id) };
+          if (applyRecipes) announceStockChanges = applyRecipes(req, soldIn(result.receipt, 1), `Receipt #${result.receipt.receipt_label}`);
         }
         writeState(after, before);
       }
@@ -125,6 +129,8 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
       bumpRevision();
       return viewOperation(db.prepare('SELECT * FROM dining_operations WHERE id = ?').get(op.id));
     });
+    announceStockChanges();
+    return outcome;
   }
   app.use('/api/dining', onlyAmbiente, requireRole('pos', 'kitchen', 'inventory', 'barista'));
   app.use('/api/dining', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -149,6 +155,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     res.json(req.role === 'admin' ? rows : rows.filter(r => sameActor(r, req)));
   }));
   app.post('/api/dining/undo/:id', handle((req, res) => {
+    let announceStockChanges = () => {};
     const outcome = transaction(() => {
       const row = db.prepare('SELECT * FROM dining_operations WHERE id = ?').get(req.params.id);
       if (!row || row.status !== 'applied' || row.reversed_by) throw new DiningError('This action cannot be undone', 409);
@@ -166,6 +173,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
         if (!paid || paid.status !== 'paid') throw new DiningError('Receipt already changed. Review the receipt history.', 409);
         refund_cents = paid.total_cents;
         db.prepare("UPDATE orders SET status = 'voided', void_reason = 'Table settlement reversed', voided_at = ?, voided_by = ?, version = version + 1 WHERE id = ?").run(at, req.role, paid.id);
+        if (applyRecipes) announceStockChanges = applyRecipes(req, soldIn(paid, -1), `Receipt #${paid.receipt_label} settlement reversed`);
         v.status = 'refunded'; v.refunded_at = at; v.version++;
         for (const s of v.submissions) { s.cancelled_at = at; s.cancel_reason = 'Settlement reversed'; s.change_seq = (s.change_seq ?? 0) + 1; }
         // Keep the paid bill snapshot and receipt link for refund reconciliation.
@@ -203,6 +211,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
       bumpRevision();
       return { refund_cents };
     });
+    announceStockChanges();
     announce();
     const original = db.prepare('SELECT operation FROM dining_operations WHERE id = ?').get(req.params.id);
     const op = JSON.parse(original.operation), state = readState();

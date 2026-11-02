@@ -6,47 +6,63 @@ import { ROLE_LABEL } from '../passkeys/routes.js';
 
 // ---------- Inventory ----------
 
-import { announceStock, applyRecipes, inventoryItems, inventoryProblem, isLow, isQty, logStock, qtyText, roundQty } from './stock.js';
+import { announceStock, applyPrep, applyRecipes, inventoryItems, inventoryProblem, isLow, isQty, logStock, qtyText, roundQty } from './stock.js';
 export { announceStock, applyRecipes } from './stock.js';
 
 app.get('/api/inventory', (req, res) => res.json(inventoryItems()));
 
+const KINDS = ['ingredient', 'portion', 'supply'];
+const sectionOf = (value) => typeof value === 'string' && value.trim() ? value.trim().slice(0, 40) : null;
+
 // Staff and the owner add an item with its current stock and the level to reorder at.
 app.post('/api/inventory/items', (req, res) => {
-  const { name, unit, quantity, threshold } = req.body ?? {};
+  const { name, unit, quantity, threshold, kind = 'ingredient' } = req.body ?? {};
   const problem = inventoryProblem({ name, unit });
   if (problem) return res.status(400).json({ error: problem });
   if (!isQty(quantity)) return res.status(400).json({ error: 'Enter how much is in stock now' });
   if (!isQty(threshold)) return res.status(400).json({ error: 'Enter the level to reorder at' });
+  if (!KINDS.includes(kind)) return res.status(400).json({ error: 'Choose ingredient, portion or supply' });
   const now = new Date().toISOString();
   const id = Number(db.prepare(
-    `INSERT INTO inventory_items (name, unit, quantity, threshold, created_at, updated_at, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(name.trim(), unit.trim(), roundQty(quantity), roundQty(threshold), now, now, req.staff?.name ?? ROLE_LABEL[req.role]).lastInsertRowid);
+    `INSERT INTO inventory_items (name, unit, quantity, threshold, created_at, updated_at, updated_by, kind, section)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(name.trim(), unit.trim(), roundQty(quantity), roundQty(threshold), now, now, req.staff?.name ?? ROLE_LABEL[req.role], kind, sectionOf(req.body?.section)).lastInsertRowid);
   const item = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id);
   logStock(req, item, 'added', item.quantity);
   announceStock(req, null, item);
   res.status(201).json({ ...item, low: isLow(item) });
 });
 
-// Staff update a stock level: a fresh count, a delivery received, or some used up or thrown away.
+// Staff update a stock level: a fresh count, a delivery received, portions prepped (which takes out
+// the ingredients prepping them uses), or some used up or thrown away.
 app.post('/api/inventory/:id/stock', (req, res) => {
   const item = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND active = 1').get(Number(req.params.id));
   if (!item) return res.status(404).json({ error: 'Item not found' });
   const { kind, amount } = req.body ?? {};
   const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim().slice(0, 140) : null;
-  if (!['count', 'received', 'used'].includes(kind)) return res.status(400).json({ error: 'Choose count, received or used' });
+  if (!['count', 'received', 'prepped', 'used'].includes(kind)) return res.status(400).json({ error: 'Choose count, received, prepped or used' });
+  if (kind === 'prepped' && item.kind !== 'portion') return res.status(400).json({ error: `${item.name} isn't a portion the kitchen preps` });
   if (!isQty(amount) || (kind !== 'count' && amount === 0)) return res.status(400).json({ error: 'Enter an amount' });
   if (kind === 'used' && amount > item.quantity + 1e-9) {
     return res.status(400).json({ error: `Only ${qtyText(item)} recorded. Do a count instead if that's wrong.` });
   }
 
-  const quantity = roundQty(kind === 'count' ? amount : kind === 'received' ? item.quantity + amount : item.quantity - amount);
-  db.prepare('UPDATE inventory_items SET quantity = ?, updated_at = ?, updated_by = ? WHERE id = ?')
-    .run(quantity, new Date().toISOString(), req.staff?.name ?? ROLE_LABEL[req.role], item.id);
+  const quantity = roundQty(kind === 'count' ? amount : kind === 'used' ? item.quantity - amount : item.quantity + amount);
+  let announceIngredients = () => {};
+  db.exec('SAVEPOINT stock_write');
+  try {
+    db.prepare('UPDATE inventory_items SET quantity = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+      .run(quantity, new Date().toISOString(), req.staff?.name ?? ROLE_LABEL[req.role], item.id);
+    logStock(req, { ...item, quantity }, kind, quantity - item.quantity, note);
+    if (kind === 'prepped') announceIngredients = applyPrep(req, item, amount, `Prepped ${roundQty(amount)} ${item.name}`);
+    db.exec('RELEASE stock_write');
+  } catch (err) {
+    db.exec('ROLLBACK TO stock_write; RELEASE stock_write');
+    throw err;
+  }
   const updated = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(item.id);
-  logStock(req, updated, kind, quantity - item.quantity, note);
   announceStock(req, item, updated);
+  announceIngredients();
   res.json({ ...updated, low: isLow(updated) });
 });
 
@@ -59,16 +75,17 @@ app.get('/api/admin/inventory', (req, res) => {
   res.json({ items: inventoryItems(), log });
 });
 
-// Owner: rename, change the unit or the reorder level.
+// Owner: rename, change the unit, the reorder level, the sheet section, or whether it's a portion.
 app.patch('/api/admin/inventory/:id', (req, res) => {
   const item = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND active = 1').get(Number(req.params.id));
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  const edited = { name: req.body?.name ?? item.name, unit: req.body?.unit ?? item.unit, threshold: req.body?.threshold ?? item.threshold };
+  const edited = { name: req.body?.name ?? item.name, unit: req.body?.unit ?? item.unit, threshold: req.body?.threshold ?? item.threshold, kind: req.body?.kind ?? item.kind ?? 'ingredient', section: 'section' in (req.body ?? {}) ? sectionOf(req.body.section) : item.section };
   const problem = inventoryProblem(edited, item.id);
   if (problem) return res.status(400).json({ error: problem });
   if (!isQty(edited.threshold)) return res.status(400).json({ error: 'Enter a valid reorder level' });
-  db.prepare('UPDATE inventory_items SET name = ?, unit = ?, threshold = ? WHERE id = ?')
-    .run(edited.name.trim(), edited.unit.trim(), roundQty(edited.threshold), item.id);
+  if (!KINDS.includes(edited.kind)) return res.status(400).json({ error: 'Choose ingredient, portion or supply' });
+  db.prepare('UPDATE inventory_items SET name = ?, unit = ?, threshold = ?, kind = ?, section = ? WHERE id = ?')
+    .run(edited.name.trim(), edited.unit.trim(), roundQty(edited.threshold), edited.kind, edited.section, item.id);
   const updated = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(item.id);
   if (updated.threshold !== item.threshold) {
     logStock(req, updated, 'edited', 0, `Reorder level ${qtyText(item, item.threshold)} → ${qtyText(updated, updated.threshold)}`);
@@ -97,6 +114,7 @@ app.get('/api/admin/recipes', (req, res) => {
 });
 
 // Owner: replace one menu item's recipe. An empty list means selling it no longer touches stock.
+// An amount of 0 keeps the link but takes nothing out until the amount is entered.
 app.put('/api/admin/recipes/:menuItemId', (req, res) => {
   const menuItem = db.prepare("SELECT * FROM menu_items WHERE id = ? AND active = 1 AND status = 'approved'").get(Number(req.params.menuItemId));
   if (!menuItem) return res.status(404).json({ error: 'Menu item not found' });
@@ -106,7 +124,7 @@ app.put('/api/admin/recipes/:menuItemId', (req, res) => {
   for (const { inventoryItemId, qty } of ingredients) {
     const item = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND active = 1').get(Number(inventoryItemId));
     if (!item) return res.status(400).json({ error: 'Stock item not found' });
-    if (!isQty(qty) || qty === 0) return res.status(400).json({ error: `Enter how much ${item.name} one ${menuItem.name} uses` });
+    if (!isQty(qty)) return res.status(400).json({ error: `Enter how much ${item.name} one ${menuItem.name} uses` });
     rows.set(item.id, { item, qty: roundQty(qty) });
   }
   db.exec('SAVEPOINT feature_write');
@@ -114,7 +132,7 @@ app.put('/api/admin/recipes/:menuItemId', (req, res) => {
     db.prepare('DELETE FROM menu_recipes WHERE menu_item_id = ?').run(menuItem.id);
     const insert = db.prepare('INSERT INTO menu_recipes (menu_item_id, inventory_item_id, qty) VALUES (?, ?, ?)');
     for (const { item, qty } of rows.values()) insert.run(menuItem.id, item.id, qty);
-    const uses = [...rows.values()].map(({ item, qty }) => qtyText(item, qty) + ' ' + item.name).join(', ');
+    const uses = [...rows.values()].map(({ item, qty }) => (qty ? qtyText(item, qty) + ' ' : '') + item.name).join(', ');
     logActivity(req, 'menu.recipe', `${menuItem.name} now uses ${uses || 'nothing from stock'}`);
     db.exec('RELEASE feature_write');
   } catch (err) {
@@ -122,6 +140,45 @@ app.put('/api/admin/recipes/:menuItemId', (req, res) => {
     throw err;
   }
   storeBroadcast('admin').emit('inventory.updated', {});
+  res.json({ ok: true });
+});
+
+// Owner: what prepping one of each portion uses.
+app.get('/api/admin/prep', (req, res) => {
+  res.json(db.prepare(
+    `SELECT p.portion_id, p.ingredient_id, p.qty, i.name, i.unit
+       FROM prep_recipes p JOIN inventory_items i ON i.id = p.ingredient_id
+      WHERE i.active = 1 ORDER BY lower(i.name)`
+  ).all());
+});
+
+// Owner: replace what prepping one portion uses. An amount of 0 keeps the link, taking nothing out yet.
+app.put('/api/admin/prep/:portionId', (req, res) => {
+  const portion = db.prepare("SELECT * FROM inventory_items WHERE id = ? AND active = 1 AND kind = 'portion'").get(Number(req.params.portionId));
+  if (!portion) return res.status(404).json({ error: 'Portion not found' });
+  const { ingredients } = req.body ?? {};
+  if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'ingredients must be a list' });
+  const rows = new Map();
+  for (const { inventoryItemId, qty } of ingredients) {
+    const item = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND active = 1').get(Number(inventoryItemId));
+    if (!item) return res.status(400).json({ error: 'Stock item not found' });
+    if (item.id === portion.id) return res.status(400).json({ error: `${portion.name} can't use itself` });
+    if (!isQty(qty)) return res.status(400).json({ error: `Enter how much ${item.name} one ${portion.name} uses` });
+    rows.set(item.id, { item, qty: roundQty(qty) });
+  }
+  db.exec('SAVEPOINT feature_write');
+  try {
+    db.prepare('DELETE FROM prep_recipes WHERE portion_id = ?').run(portion.id);
+    const insert = db.prepare('INSERT INTO prep_recipes (portion_id, ingredient_id, qty) VALUES (?, ?, ?)');
+    for (const { item, qty } of rows.values()) insert.run(portion.id, item.id, qty);
+    const uses = [...rows.values()].map(({ item, qty }) => (qty ? qtyText(item, qty) + ' ' : '') + item.name).join(', ');
+    logActivity(req, 'inventory.prep', `Prepping ${portion.name} now uses ${uses || 'nothing from stock'}`);
+    db.exec('RELEASE feature_write');
+  } catch (err) {
+    db.exec('ROLLBACK TO feature_write; RELEASE feature_write');
+    throw err;
+  }
+  storeBroadcast([...STOCK_KEEPERS, 'admin']).emit('inventory.updated', {});
   res.json({ ok: true });
 });
 

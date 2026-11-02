@@ -176,12 +176,12 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       const consumed = await request(`/api/inventory/${stock.data.id}/stock`, inventory, { kind: 'used', amount: 1 });
       assert.equal((await request(`/api/dining/business-undo/${received.data.undoId}`, inventory, {})).status, 409);
       assert.equal((await request(`/api/dining/business-undo/${consumed.data.undoId}`, inventory, {})).status, 200);
-      assert.equal((await request('/api/inventory', inventory)).data[0].quantity, 15);
+      assert.equal((await request('/api/inventory', inventory)).data.find(i => i.id === stock.data.id).quantity, 15);
       const log = (await request('/api/admin/inventory', owner)).data.log;
       assert.equal(log[0].kind, 'undo'); assert.equal(log[0].change, 1);
       assert.equal((await request(`/api/dining/business-undo/${consumed.data.undoId}`, inventory, {})).status, 409);
       assert.equal((await request(`/api/dining/business-undo/${received.data.undoId}`, inventory, {})).status, 200);
-      assert.equal((await request('/api/inventory', inventory)).data[0].quantity, 10);
+      assert.equal((await request('/api/inventory', inventory)).data.find(i => i.id === stock.data.id).quantity, 10);
       const b = await request('/api/orders', barista, { clientId: id(), station: 'barista', items: [{ menuItemId: current.id, qty: 1 }], cashTenderedCents: current.price_cents * 2 });
       assert.match(b.data.receipt_label, /^B-/);
       assert.equal((await request(`/api/dining/business-undo/${b.data.undoId}`, barista, {})).status, 200);

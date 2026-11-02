@@ -233,11 +233,26 @@ db.exec(`
 
   -- What one of each menu item uses from stock, e.g. 1 Sweet Corn uses 1 pcs of Corn.
   -- Selling takes it out, editing a receipt adjusts it, voiding puts it back.
+  -- An amount of 0 means linked, amount not entered yet: selling takes nothing out.
   CREATE TABLE IF NOT EXISTS menu_recipes (
     menu_item_id      INTEGER NOT NULL REFERENCES menu_items(id),
     inventory_item_id INTEGER NOT NULL REFERENCES inventory_items(id),
     qty               REAL    NOT NULL,
     PRIMARY KEY (menu_item_id, inventory_item_id)
+  );
+`);
+// Stock is grouped like the kitchen's paper sheets. A portion is a ready-to-cook serving the kitchen
+// preps ahead (a marinated kebab, a pasta pack): selling a dish takes portions out, prepping one takes
+// its raw ingredients out. Ingredients and supplies are what's bought.
+addMissingColumns('inventory_items', { section: 'TEXT', kind: 'TEXT' }); // kind: ingredient | portion | supply
+db.exec(`
+  -- What prepping one portion uses, e.g. 1 Chicken Kebab portion uses 120 g chicken and 5 g garlic.
+  -- An amount of 0 means the ingredient is linked but its amount isn't entered yet: nothing comes out.
+  CREATE TABLE IF NOT EXISTS prep_recipes (
+    portion_id    INTEGER NOT NULL REFERENCES inventory_items(id),
+    ingredient_id INTEGER NOT NULL REFERENCES inventory_items(id),
+    qty           REAL    NOT NULL,
+    PRIMARY KEY (portion_id, ingredient_id)
   );
 `);
 // The kitchen can mark single items ready while the rest of the ticket is still being made.

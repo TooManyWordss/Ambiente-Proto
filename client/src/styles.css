@@ -527,3 +527,8 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .kb-switch{position:fixed;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:60;padding:10px 14px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text);font:inherit;font-weight:700;box-shadow:0 4px 14px #0003}
 body.kb-open{padding-bottom:var(--kb-h)}body.kb-open .pos-shell{height:calc(100dvh - var(--kb-h))}
 body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:calc(100dvh - var(--kb-h) - 32px)}
+/* Inventory grouped like the kitchen's paper sheets. */
+.stock-section{display:grid;gap:10px}.stock-section h2{margin:8px 0 0;font:700 1.05rem var(--display);letter-spacing:.04em}.stock-section h2 small{color:var(--muted);font:600 .8rem var(--body)}
+.stock-uses{margin:0 0 12px;padding:10px 12px;border-radius:10px;background:var(--surface-2);font-size:.9rem;line-height:1.5}
+.inv-section th{padding-top:14px;text-align:left;font:700 .95rem var(--display);letter-spacing:.04em;color:var(--text)}
+.inv-uses{max-width:280px;font-size:.85rem}.inv-kind{padding:5px 6px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)}

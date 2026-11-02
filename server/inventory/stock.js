@@ -12,9 +12,23 @@ export const isQty = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 
 export const isLow = (item) => item.quantity < item.threshold;
 export const qtyText = (item, n = item.quantity) => `${roundQty(n)} ${item.unit}`;
 
+// Each item says where it goes: the dishes that take it out when sold, and the portions that use it
+// when prepped. A portion also lists what prepping it uses.
 export function inventoryItems() {
+  const usedIn = new Map(), prepUses = new Map();
+  const add = (map, id, name) => { if (!map.has(id)) map.set(id, []); map.get(id).push(name); };
+  for (const r of db.prepare(
+    `SELECT r.inventory_item_id AS id, m.name FROM menu_recipes r JOIN menu_items m ON m.id = r.menu_item_id
+      WHERE m.active = 1 ORDER BY lower(m.name)`
+  ).all()) add(usedIn, r.id, r.name);
+  for (const r of db.prepare(
+    `SELECT p.portion_id, p.ingredient_id, portion.name AS portion, ingredient.name AS ingredient
+       FROM prep_recipes p JOIN inventory_items portion ON portion.id = p.portion_id AND portion.active = 1
+       JOIN inventory_items ingredient ON ingredient.id = p.ingredient_id AND ingredient.active = 1
+      ORDER BY lower(portion.name), lower(ingredient.name)`
+  ).all()) { add(usedIn, r.ingredient_id, `${r.portion} (prep)`); add(prepUses, r.portion_id, r.ingredient); }
   return db.prepare('SELECT * FROM inventory_items WHERE active = 1 ORDER BY lower(name)').all()
-    .map((i) => ({ ...i, low: isLow(i) }));
+    .map((i) => ({ ...i, low: isLow(i), used_in: usedIn.get(i.id) ?? [], prep_uses: prepUses.get(i.id) ?? [] }));
 }
 
 export function inventoryProblem({ name, unit }, ignoreId = 0) {
@@ -50,7 +64,7 @@ export function applyRecipes(req, soldByMenuItem, note) {
   const changed = new Map(); // inventory id -> stock before the first change
   const recipe = db.prepare(
     `SELECT r.qty, i.* FROM menu_recipes r JOIN inventory_items i ON i.id = r.inventory_item_id
-      WHERE r.menu_item_id = ? AND i.active = 1`
+      WHERE r.menu_item_id = ? AND i.active = 1 AND r.qty > 0`
   );
   const update = db.prepare('UPDATE inventory_items SET quantity = ?, updated_at = ?, updated_by = ? WHERE id = ?');
   const now = new Date().toISOString();
@@ -67,5 +81,25 @@ export function applyRecipes(req, soldByMenuItem, note) {
   }
   return () => {
     for (const [id, before] of changed) announceStock(req, before, db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(id));
+  };
+}
+
+// Prepping portions (e.g. 13 Chicken Kebab) takes out what that many use. Ingredients whose amount
+// isn't entered yet are skipped. Call inside the transaction; call the returned function after it.
+export function applyPrep(req, portion, made, note) {
+  const rows = db.prepare(
+    `SELECT p.qty, i.* FROM prep_recipes p JOIN inventory_items i ON i.id = p.ingredient_id
+      WHERE p.portion_id = ? AND i.active = 1 AND p.qty > 0`
+  ).all(portion.id);
+  const update = db.prepare('UPDATE inventory_items SET quantity = ?, updated_at = ?, updated_by = ? WHERE id = ?');
+  const now = new Date().toISOString(), changed = [];
+  for (const { qty: perPortion, ...item } of rows) {
+    const change = -perPortion * made, quantity = roundQty(item.quantity + change);
+    update.run(quantity, now, req.staff?.name ?? ROLE_LABEL[req.role], item.id);
+    logStock(req, { ...item, quantity }, 'prep', change, note);
+    changed.push(item);
+  }
+  return () => {
+    for (const before of changed) announceStock(req, before, db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(before.id));
   };
 }
