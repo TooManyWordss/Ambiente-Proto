@@ -15,7 +15,7 @@ test('a 58 mm ESC/POS receipt fits 32 columns, prints plain ASCII and ends with 
   const out = text(bytes);
   assert.deepEqual([...bytes.slice(0, 2)], [0x1b, 0x40], 'starts by resetting the printer');
   assert.ok(out.includes('Cafe Ambiente'), 'accents are dropped for the printer');
-  assert.ok(out.includes('Receipt #1001'));
+  assert.ok(out.includes('Order #1001') && !out.includes('Receipt'));
   assert.ok(out.includes('Table 5 - 2 guests'));
   assert.ok(out.includes('P370.00') && out.includes('P460.00') && out.includes('P40.00'));
   assert.ok([...bytes].every((b) => b < 0x80 || b === 0xfa), 'only ASCII text');
@@ -41,7 +41,7 @@ test('the kitchen slip lists what to cook without prices and prints after the re
     total_cents: 44000, cash_tendered_cents: 50000, change_cents: 6000 };
   const slip = encodeKitchenSlip(order, { columns: 32, cut: false, drawer: false });
   const out = text(slip);
-  assert.ok(out.includes('KITCHEN') && out.includes('Couch') && out.includes('6 guests') && out.includes('Receipt #1002'));
+  assert.ok(out.includes('KITCHEN') && out.includes('Couch') && out.includes('6 guests') && out.includes('Order #1002') && !out.includes('Receipt'));
   assert.ok(out.includes('2 x Sweet Corn') && out.includes('1 x Carbonara'));
   assert.ok(!/P\d/.test(out), 'no prices on the kitchen slip');
   const lines = out.replace(/\x1b@|\x1b[aEJ][\s\S]|\x1d[!B][\s\S]/g, '').split('\n');

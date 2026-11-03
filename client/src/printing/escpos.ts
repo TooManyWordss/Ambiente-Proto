@@ -83,13 +83,13 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   if (r.station === 'barista' && settings.title) p.line(settings.title);
   for (const h of settings.header ?? []) p.line(h);
   p.align('left').rule('=');
-  if (r.test) p.align('center').line('Test receipt').line('The printer is working').align('left');
+  if (r.test) p.align('center').line('Test order').line('The printer is working').align('left');
   if (r.offline) p.line('Saved offline - number given when sent');
   if (r.reprint) p.bold(true).line('*** REPRINT ***').bold(false);
   // A table's bill printed before they pay says so.
   if (r.heading) p.bold(true).line(r.heading).bold(false);
   if (r.station === 'barista' && r.label) p.align('center').bold(true).size(true, true).line(`Order ${r.label}`).size(false, false).bold(false).align('left').line(clock(r.created_at));
-  else if (!r.test && r.label) p.bold(true).row(`Receipt #${r.label}`, clock(r.created_at)).bold(false);
+  else if (!r.test && r.label) p.bold(true).row(`Order #${r.label}`, clock(r.created_at)).bold(false);
   else p.line(clock(r.created_at));
   if (r.table_name) p.line(`${r.table_name}${r.guests ? ` - ${r.guests} guest${r.guests === 1 ? '' : 's'}` : ''}`);
   if (r.staff_name) p.line(`Served by ${r.staff_name}`);
@@ -126,7 +126,7 @@ export function encodeKitchenSlip(r: ReceiptData, options: PrintOptions) {
   // Double width fits half the characters: the band is " KITCHEN ORDER " on 58 mm paper and up.
   p.align('center').bold(true).reverse(true).size(true, true).line(r.prep === 'barista' ? ' BARISTA ORDER ' : ' KITCHEN ORDER ').size(false, false).reverse(false);
   p.size(false, true).line(r.table_name ?? 'Takeout').size(false, false).bold(false);
-  p.line([r.guests ? `${r.guests} guest${r.guests === 1 ? '' : 's'}` : '', r.label ? `Receipt #${r.label}` : ''].filter(Boolean).join(' - ')).line(clock(r.created_at));
+  p.line([r.guests ? `${r.guests} guest${r.guests === 1 ? '' : 's'}` : '', r.label ? `Order #${r.label}` : ''].filter(Boolean).join(' - ')).line(clock(r.created_at));
   if (r.offline) p.line('Saved offline');
   if (r.reprint) p.line('*** REPRINT ***');
   if (r.late) p.bold(true).line('LATE - check for a till slip').bold(false);
