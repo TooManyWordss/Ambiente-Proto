@@ -170,7 +170,9 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       const voided = await request(`/api/dining/business-undo/${sale.data.undoId}`, pos, {});
       assert.equal(voided.status, 200, JSON.stringify(voided.data));
       assert.equal(voided.data.cash_correction_cents, -order.total_cents);
-      const stock = await request('/api/inventory/items', inventory, { name: 'Beans', unit: 'kg', quantity: 10, threshold: 2 });
+      // The inspector counts and edits stock; only the owner adds items.
+      assert.equal((await request('/api/inventory/items', inventory, { name: 'Beans', unit: 'kg', quantity: 10, threshold: 2 })).status, 403);
+      const stock = await request('/api/inventory/items', owner, { name: 'Beans', unit: 'kg', quantity: 10, threshold: 2 });
       assert.equal(stock.status, 201);
       const received = await request(`/api/inventory/${stock.data.id}/stock`, inventory, { kind: 'received', amount: 5 });
       const consumed = await request(`/api/inventory/${stock.data.id}/stock`, inventory, { kind: 'used', amount: 1 });
@@ -283,8 +285,9 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
         const value = `inventory.ambiente.${Date.now() + 3600000}.${staffId}`;
         return `session=${value}.${crypto.createHmac('sha256', 'dining-tests').update(value).digest('base64url')}`;
       };
-      const stock = await request('/api/inventory/items', cookie(first), { name: 'Identity test', unit: 'pcs', quantity: 1, threshold: 0 });
-      assert.equal(stock.status, 201);
+      const item = (await request('/api/inventory/items', owner, { name: 'Identity test', unit: 'pcs', quantity: 1, threshold: 0 })).data;
+      const stock = await request(`/api/inventory/${item.id}/stock`, cookie(first), { kind: 'received', amount: 2 });
+      assert.equal(stock.status, 200);
       assert.equal((await request(`/api/dining/business-undo/${stock.data.undoId}`, cookie(second), {})).status, 403);
       assert.equal((await request(`/api/dining/business-undo/${stock.data.undoId}`, cookie(first), {})).status, 200);
     });

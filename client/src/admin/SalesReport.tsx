@@ -7,7 +7,7 @@ import { STORE, STORE_NAME } from '../shared/store';
 import { downloadWorkbook, type Cell, type Sheet } from '../shared/xlsx';
 
 type Line = { name: string; category: string; qty: number; unit_price_cents: number; note: string };
-type Row = { order: string; status: 'paid' | 'open' | 'voided'; station: string; date: string; day: string; hour: string; time: string; table: string; guests: number | null; customer: string; items: Line[]; item_count: number; subtotal_cents: number; discount_cents: number; discount: string; tax_cents: number; total_cents: number; cash_cents: number | null; change_cents: number | null; paid_by: '' | 'Cash' | 'Card'; paid_time: string; staff: string; edits: number; void_reason: string };
+type Row = { order: string; status: 'paid' | 'open' | 'voided'; station: string; date: string; day: string; hour: string; time: string; table: string; guests: number | null; customer: string; items: Line[]; item_count: number; subtotal_cents: number; discount_cents: number; discount: string; tax_cents: number; total_cents: number; cash_cents: number | null; change_cents: number | null; paid_by: '' | 'Cash' | 'Card'; paid_time: string; staff: string; billed_by: string; edits: number; void_reason: string };
 type Totals = { orders: number; guests: number; items: number; gross_cents: number; net_cents: number; discount_cents: number; tax_cents: number };
 export type SalesReportData = { from: string; to: string; summary: Totals & { average_order_cents: number; cash_cents: number; card_cents: number; voided: number; voided_cents: number; unpaid: number; edited: number }; byDay: (Totals & { date: string; day: string })[]; byHour: (Totals & { hour: string })[]; bestSellers: { name: string; category: string; qty: number; revenue_cents: number }[]; orders: Row[] };
 type Average = { count: number; average_minutes: number | null };
@@ -41,8 +41,8 @@ export function reportSheets(r: SalesReportData, service: Service | null): Sheet
         ...SERVICE_TIMES.map(([key, label]) => [`${label} (minutes)`, minutes(service[key] as Average), `${(service[key] as Average | undefined)?.count ?? 0} complete samples`])] : []),
     ] },
     { name: 'Orders', rows: [
-      ['Order #', 'Date', 'Day', 'Hour', 'Time', 'Station', 'Table', 'Guests', 'Customer', 'What they ordered', 'Items', 'Subtotal', 'Discount', 'Discount type', 'Tax', 'Total', 'Paid by', 'Cash', 'Change', 'Status', 'Paid at', 'Staff', 'Times edited', 'Void reason'],
-      ...r.orders.map((o) => [o.order, o.date, o.day, o.hour, o.time, o.station, o.table, o.guests, o.customer, ordered(o), o.item_count, peso(o.subtotal_cents), peso(o.discount_cents), o.discount, peso(o.tax_cents), peso(o.total_cents), o.paid_by, peso(o.cash_cents), peso(o.change_cents), STATUS[o.status], o.paid_time, o.staff, o.edits || '', o.void_reason]),
+      ['Order #', 'Date', 'Day', 'Hour', 'Time', 'Station', 'Table', 'Guests', 'Customer', 'What they ordered', 'Items', 'Subtotal', 'Discount', 'Discount type', 'Tax', 'Total', 'Paid by', 'Cash', 'Change', 'Status', 'Paid at', 'Taken by', 'Billed out by', 'Times edited', 'Void reason'],
+      ...r.orders.map((o) => [o.order, o.date, o.day, o.hour, o.time, o.station, o.table, o.guests, o.customer, ordered(o), o.item_count, peso(o.subtotal_cents), peso(o.discount_cents), o.discount, peso(o.tax_cents), peso(o.total_cents), o.paid_by, peso(o.cash_cents), peso(o.change_cents), STATUS[o.status], o.paid_time, o.staff, o.billed_by, o.edits || '', o.void_reason]),
     ], widths: [9, 11, 11, 7, 7, 9, 14, 8, 9, 60] },
     { name: 'Items sold', rows: [
       ['Order #', 'Date', 'Day', 'Time', 'Table', 'Item', 'Category', 'Qty', 'Unit price', 'Line total', 'Note', 'Status'],

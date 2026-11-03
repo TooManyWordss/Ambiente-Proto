@@ -38,11 +38,11 @@ test('the waiter sends table orders and asks for the bill; only the cashier take
 
     // Asking for the bill: the cashier's till hears it and the table shows it until they pay.
     const asked = new Promise((ok) => till.once('bill.requested', ok));
-    assert.equal((await request(`/api/tables/${table.id}/request-bill`, waiter, {})).status, 200);
-    assert.equal((await asked).table_name, table.name);
+    assert.equal((await request(`/api/tables/${table.id}/request-bill`, waiter, { paymentMethod: 'card' })).status, 200);
+    assert.deepEqual([(await asked).table_name, (await asked).pay_by], [table.name, 'card']);
     let party = (await request('/api/tables', pos)).data.find((t) => t.id === table.id).party;
     assert.ok(party.bill_requested_at);
-    assert.equal(party.bill_requested_by, 'Waiter');
+    assert.deepEqual([party.bill_requested_by, party.bill_pay_by], ['Waiter', 'card']);
     assert.equal((await request(`/api/tables/${table.id}/request-bill`, waiter, {}, 'DELETE')).status, 401, 'only the cashier dismisses');
     const due = (await request(`/api/tables/${table.id}/bill`, pos)).data.orders.reduce((n, o) => n + o.total_cents, 0);
     assert.equal((await request(`/api/tables/${table.id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'cash', cashTenderedCents: due, totalCents: due })).status, 200);

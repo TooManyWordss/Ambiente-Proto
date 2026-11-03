@@ -257,6 +257,9 @@ export function applyDining(input, operation, context) {
     if (!linesOf(visit).some(l => l.qty > 0)) fail('Cannot settle an empty bill');
     if (!visit.bill_requested_at) fail('Request the bill before settlement');
     visit.bill = totals(visit, context.taxRate);
+    // When cashiers have staff codes, the server checks the code and passes the cashier's name (or the problem).
+    if (p.code_problem) fail(`${p.code_problem}. Settle it again with the cashier’s staff code.`);
+    if (p.settled_by) visit.settled_by = text(p.settled_by, 'cashier', 40);
     // Paid by card: the card covers the bill exactly, so there's no cash or change to record.
     visit.payment_method = paymentMethod(p.payment_method);
     if (visit.payment_method === 'cash') integer(p.cash_cents, 'cash tendered', visit.bill.total_cents);

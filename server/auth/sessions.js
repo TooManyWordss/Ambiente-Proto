@@ -79,7 +79,8 @@ export function requireRole(...needs) {
     const session = readSession(req.headers.cookie);
     if (session && can(session.role, ...needs)) {
       req.role = session.role;
-      req.staff = session.staff;
+      // A staff code typed for this action (see staff/codes.js) says who did it, over the screen's login.
+      req.staff = req.codeStaff ?? session.staff;
       return next();
     }
     res.status(401).json({ error: 'Please log in' });

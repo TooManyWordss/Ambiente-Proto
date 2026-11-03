@@ -35,7 +35,7 @@ export function diningTables() {
     open.set(o.table_id, party);
   }
   return db.prepare('SELECT * FROM floor_tables WHERE active = 1 ORDER BY id').all()
-    .map(({ bill_requested_at, bill_requested_by, ...t }) => ({ ...t, party: open.has(t.id) ? { ...open.get(t.id), bill_requested_at, bill_requested_by } : null }));
+    .map(({ bill_requested_at, bill_requested_by, bill_pay_by, ...t }) => ({ ...t, party: open.has(t.id) ? { ...open.get(t.id), bill_requested_at, bill_requested_by, bill_pay_by } : null }));
 }
 
 export const announceTables = () => storeBroadcast(['pos', 'barista', 'kitchen', 'admin']).emit('tables.updated');
@@ -63,19 +63,19 @@ app.put('/api/admin/floor', (req, res) => {
   res.json(floorLayout());
 });
 
-const clearBillRequest = (tableId) => db.prepare('UPDATE floor_tables SET bill_requested_at = NULL, bill_requested_by = NULL WHERE id = ?').run(tableId);
+const clearBillRequest = (tableId) => db.prepare('UPDATE floor_tables SET bill_requested_at = NULL, bill_requested_by = NULL, bill_pay_by = NULL WHERE id = ?').run(tableId);
 
-// A waiter asks for a table's bill. The cashier's till shows the request; the cashier bills the table out
-// (the waiter can't take payment). The request clears once they pay, or when the cashier dismisses it.
+// A waiter asks for a table's bill, saying whether they'll pay by cash or card. The cashier's till shows the
+// request and opens Bill out with that method picked; the cashier takes the payment (the waiter can't). The request clears once they pay, or when the cashier dismisses it.
 app.post('/api/tables/:id/request-bill', requireRole(...SELLERS), (req, res) => {
   const table = db.prepare('SELECT * FROM floor_tables WHERE id = ? AND active = 1').get(Number(req.params.id));
   if (!table) return res.status(404).json({ error: 'Table not found' });
   if (!openTableOrders(table.id).some((o) => o.status === 'open')) return res.status(409).json({ error: `${table.name} has nothing to pay` });
-  const by = req.staff?.name ?? (req.role === 'barista' ? 'Waiter' : 'Cashier');
-  db.prepare('UPDATE floor_tables SET bill_requested_at = COALESCE(bill_requested_at, ?), bill_requested_by = COALESCE(bill_requested_by, ?) WHERE id = ?').run(new Date().toISOString(), by, table.id);
-  logActivity(req, 'table.bill_requested', `${by} asked for ${table.name}'s bill`);
+  const by = req.staff?.name ?? (req.role === 'barista' ? 'Waiter' : 'Cashier'), payBy = paymentMethod(req.body?.paymentMethod);
+  db.prepare('UPDATE floor_tables SET bill_requested_at = COALESCE(bill_requested_at, ?), bill_requested_by = COALESCE(bill_requested_by, ?), bill_pay_by = ? WHERE id = ?').run(new Date().toISOString(), by, payBy, table.id);
+  logActivity(req, 'table.bill_requested', `${by} asked for ${table.name}'s bill (paying by ${payBy})`);
   announceTables();
-  storeBroadcast('pos').emit('bill.requested', { table_id: table.id, table_name: table.name, by });
+  storeBroadcast('pos').emit('bill.requested', { table_id: table.id, table_name: table.name, by, pay_by: payBy });
   res.json({ ok: true });
 });
 app.delete('/api/tables/:id/request-bill', requireRole('pos'), (req, res) => {
@@ -96,8 +96,8 @@ app.post('/api/tables/:id/bill-out', requireRole('pos'), (req, res) => {
   const stay = Math.round((Date.parse(now) - Date.parse(open[0].seated_at ?? open[0].created_at)) / 60000);
   db.exec('BEGIN');
   try {
-    const mark = db.prepare('UPDATE orders SET billed_out_at = ? WHERE id = ?');
-    for (const o of open) mark.run(now, o.id);
+    const mark = db.prepare('UPDATE orders SET billed_out_at = ?, billed_by_name = COALESCE(billed_by_name, ?) WHERE id = ?');
+    for (const o of open) mark.run(now, req.staff?.name ?? null, o.id);
     clearBillRequest(table.id);
     logActivity(req, 'table.billed_out',
       `${table.name} billed out after ${stay} min · ${open.map((o) => `#${receiptLabel(o)}`).join(', ')} · ${money(open.reduce((n, o) => n + o.total_cents, 0))}`);
@@ -128,7 +128,7 @@ export function paidBill(billId) {
     created_at: first.paid_at, staff_name: orders.at(-1).staff_name, labels: orders.map((o) => receiptLabel(o)), order_ids: orders.map((o) => o.id),
     items: orders.flatMap((o) => o.items), subtotal_cents: sum('subtotal_cents'), discount_cents: sum('discount_cents'), tax_cents: sum('tax_cents'), total_cents: sum('total_cents'),
     discount_json: JSON.stringify(discount?.kind === 'fixed' ? { ...discount, value: sum('discount_cents') } : discount),
-    cash_tendered_cents: first.cash_tendered_cents, change_cents: first.change_cents, payment_method: first.payment_method,
+    cash_tendered_cents: first.cash_tendered_cents, change_cents: first.change_cents, payment_method: first.payment_method, billed_by_name: first.billed_by_name,
   };
 }
 
@@ -163,8 +163,8 @@ app.post('/api/tables/:id/pay', requireRole('pos'), (req, res) => {
   db.exec('BEGIN');
   try {
     const pay = db.prepare(`UPDATE orders SET status = 'paid', subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, discount_json = ?,
-      cash_tendered_cents = ?, change_cents = ?, payment_method = ?, bill_id = ?, paid_at = ?, version = version + 1 WHERE id = ? AND status = 'open'`);
-    for (const o of bill.orders) pay.run(o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents, JSON.stringify(o.discount), cash, change, paidBy, billId, now, o.id);
+      cash_tendered_cents = ?, change_cents = ?, payment_method = ?, billed_by_name = ?, bill_id = ?, paid_at = ?, version = version + 1 WHERE id = ? AND status = 'open'`);
+    for (const o of bill.orders) pay.run(o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents, JSON.stringify(o.discount), cash, change, paidBy, req.staff?.name ?? null, billId, now, o.id);
     const free = db.prepare('UPDATE orders SET billed_out_at = ? WHERE id = ?');
     for (const o of open) free.run(now, o.id);
     clearBillRequest(table.id);

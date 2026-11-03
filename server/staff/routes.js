@@ -4,13 +4,14 @@ import { pinAllowed, setSetting } from '../core/settings.js';
 import { logActivity } from '../sales/orders.js';
 import { app, io } from '../core/http.js';
 import { makeSetupCode, ROLE_LABEL, setupCodes } from '../passkeys/routes.js';
+import { codeTaken, isCode, lastUsers } from './codes.js';
 
 // ---------- Admin: staff and sign-in settings ----------
 
 app.get('/api/admin/security', (req, res) => {
   const staff = db
     .prepare(
-      `SELECT s.id, s.name, s.role, s.created_at, COUNT(p.id) AS passkeys, MAX(p.last_used_at) AS last_used_at
+      `SELECT s.id, s.name, s.role, s.created_at, s.code_hash IS NOT NULL AS has_code, COUNT(p.id) AS passkeys, MAX(p.last_used_at) AS last_used_at
          FROM staff s LEFT JOIN passkeys p ON p.staff_id = s.id
         WHERE s.active = 1 GROUP BY s.id ORDER BY s.role, s.name`
     )
@@ -18,18 +19,21 @@ app.get('/api/admin/security', (req, res) => {
   const passkeys = db
     .prepare('SELECT id, staff_id, role, device, created_at, last_used_at FROM passkeys ORDER BY created_at')
     .all();
-  res.json({ staff, passkeys, pin: pinSettings(), pinSet: Object.fromEntries(PIN_ROLES.map((role) => [role, !!secretFor(role)])) });
+  res.json({ staff, passkeys, pin: pinSettings(), pinSet: Object.fromEntries(PIN_ROLES.map((role) => [role, !!secretFor(role)])), lastUsers: lastUsers() });
 });
 
 app.post('/api/admin/staff', (req, res) => {
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const role = req.body?.role;
   if (!name || name.length > 40) return res.status(400).json({ error: 'Name must be 1–40 characters' });
-  if (!['pos', 'barista', 'kitchen', 'inventory'].includes(role)) return res.status(400).json({ error: 'Choose cashier, barista, kitchen or inventory' });
+  if (!['pos', 'barista', 'kitchen', 'inventory'].includes(role)) return res.status(400).json({ error: 'Choose cashier, waiter, kitchen or inventory' });
+  const code = req.body?.code || null;
+  if (code && !isCode(code)) return res.status(400).json({ error: 'A staff code is 4 to 6 digits' });
+  if (code && codeTaken(code)) return res.status(400).json({ error: 'Someone already has that code. Choose another.' });
   if (db.prepare('SELECT 1 FROM staff WHERE lower(name) = lower(?) AND active = 1').get(name)) {
     return res.status(400).json({ error: `${name} is already on the staff list` });
   }
-  const id = Number(db.prepare('INSERT INTO staff (name, role, created_at) VALUES (?, ?, ?)').run(name, role, new Date().toISOString()).lastInsertRowid);
+  const id = Number(db.prepare('INSERT INTO staff (name, role, created_at, code_hash) VALUES (?, ?, ?, ?)').run(name, role, new Date().toISOString(), code ? hashSecret(code) : null).lastInsertRowid);
   logActivity(req, 'staff.added', `Added ${name} (${ROLE_LABEL[role]})`);
   res.status(201).json({ id, name, role, ...makeSetupCode(id) });
 });
@@ -38,6 +42,18 @@ app.post('/api/admin/staff/:id/code', (req, res) => {
   const staff = db.prepare('SELECT * FROM staff WHERE id = ? AND active = 1').get(Number(req.params.id));
   if (!staff) return res.status(404).json({ error: 'Staff member not found' });
   res.json({ name: staff.name, ...makeSetupCode(staff.id) });
+});
+
+// The owner sets (or clears, with an empty code) a person's staff code. Codes are unique; only a hash is kept.
+app.post('/api/admin/staff/:id/staff-code', (req, res) => {
+  const staff = db.prepare('SELECT * FROM staff WHERE id = ? AND active = 1').get(Number(req.params.id));
+  if (!staff) return res.status(404).json({ error: 'Staff member not found' });
+  const code = req.body?.code || null;
+  if (code && !isCode(code)) return res.status(400).json({ error: 'A staff code is 4 to 6 digits' });
+  if (code && codeTaken(code, staff.id)) return res.status(400).json({ error: 'Someone already has that code. Choose another.' });
+  db.prepare('UPDATE staff SET code_hash = ? WHERE id = ?').run(code ? hashSecret(code) : null, staff.id);
+  logActivity(req, 'staff.code', `${code ? 'Set' : 'Cleared'} ${staff.name}'s staff code`);
+  res.json({ ok: true, has_code: !!code });
 });
 
 // Removing someone signs them out everywhere straight away and deletes their passkeys.

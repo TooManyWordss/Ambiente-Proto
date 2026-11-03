@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { clearCachedSessions, roleFromPath } from './api';
+import { api, clearCachedSessions, roleFromPath } from './api';
 import { storageKey, STORE, storeUrl } from './store';
 import type { Role, User } from './types';
 
@@ -64,3 +64,16 @@ export function useToast() {
   const notify = useCallback((value: string) => { setToast(value); window.setTimeout(() => setToast(''), 4500); }, []);
   return { toast, notify };
 }
+// Whether this screen's actions need the person's staff code (once the owner has given someone on it a code).
+// Remembered on the tablet, so it still asks while offline.
+export function useCodeRequired() {
+  const key = storageKey('codes.required');
+  const [required, setRequired] = useState(() => { try { return localStorage.getItem(key) === '1'; } catch { return false; } });
+  useEffect(() => {
+    api<{ required: boolean }>('/api/staff-codes', { redirectOnUnauthorized: false })
+      .then((r) => { setRequired(r.required); try { localStorage.setItem(key, r.required ? '1' : '0'); } catch { /* not remembered */ } })
+      .catch(() => {});
+  }, [key]);
+  return required;
+}
+

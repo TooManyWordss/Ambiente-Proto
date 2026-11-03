@@ -39,7 +39,7 @@ export function initDiningSchema(db) {
   } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
-export function registerDining({ app, db, requireRole, currentStore, broadcast, taxRate, loadOrder, logActivity, announceStock, applyRecipes, extraMetricsVisits = () => [], receiptConfig, dishDetails = () => undefined }) {
+export function registerDining({ app, db, requireRole, currentStore, broadcast, taxRate, loadOrder, logActivity, announceStock, applyRecipes, extraMetricsVisits = () => [], receiptConfig, dishDetails = () => undefined, staffCode = null }) {
   const onlyAmbiente = (req, res, next) => currentStore() === 'ambiente' ? next() : res.status(404).json({ error: 'Table service is available at Café Ambiente' });
   const readState = () => ({ ...Object.fromEntries(['tables', 'visits'].map(kind => [kind, Object.fromEntries(db.prepare(`SELECT id, document FROM dining_${kind}`).all().map(r => [r.id, JSON.parse(r.document)]))])), counterOrders: Object.fromEntries(db.prepare("SELECT id FROM orders WHERE visit_id IS NULL AND status IN ('paid', 'open') AND (kitchen_status IN ('new', 'preparing') OR created_at >= ?)").all(new Date(Date.now() - 2 * 86400000).toISOString()).map(r => [String(r.id), loadOrder(r.id)])) });
   const writeState = (state, before) => {
@@ -144,7 +144,16 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     const operations = req.body?.operations;
     if (!Array.isArray(operations) || operations.length > 100) throw new DiningError('Send up to 100 operations');
     // Every operation commits independently; retrying a partially completed batch is safe.
-    const results = operations.map(op => apply(req, op));
+    // Settling a table's bill on the cashier's login needs the cashier's staff code (when cashiers have codes). The
+    // code is checked here and replaced by the cashier's name, so it's never stored; a retry with the same code
+    // becomes the same operation. A wrong code (say, typed offline) waits for the owner's review like a conflict.
+    const results = operations.map(op => {
+      if (op?.type !== 'visit.settle' || req.role !== 'pos' || !staffCode?.required('pos')) return apply(req, op);
+      const { staff_code: code, ...payload } = op.payload ?? {}, staff = staffCode.find(code, ['pos']);
+      const coded = { ...op, payload: { ...payload, settled_by: staff?.name ?? null, ...(staff ? {} : { code_problem: code ? 'Wrong staff code' : 'No staff code' }) } };
+      const own = req.staff; if (staff) req.staff = staff;
+      try { return apply(req, coded); } finally { req.staff = own; }
+    });
     announce();
     for (const result of results) {
       if (result.result?.receipt) broadcast(['pos', 'admin']).emit('order.created', result.result.receipt);

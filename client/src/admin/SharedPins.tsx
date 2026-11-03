@@ -8,7 +8,7 @@ type Props = {
   request: (url: string, options: { method: string; body: unknown }) => Promise<unknown>;
 };
 const roles: PinRole[] = ['pos', 'barista', 'kitchen', 'inventory'];
-const labels: Record<PinRole, string> = { pos: 'POS', barista: 'Waiter', kitchen: 'Kitchen', inventory: 'Inventory' };
+const labels: Record<PinRole, string> = { pos: 'POS', barista: 'Waiter', kitchen: 'Kitchen', inventory: 'Inspector' };
 
 export default function SharedPins({ security, refresh, notify, request }: Props) {
   const [editing, setEditing] = useState<PinRole | null>(null);
@@ -47,7 +47,7 @@ export default function SharedPins({ security, refresh, notify, request }: Props
     <h3>Shared PINs</h3>
     <p className="hint">Set a PIN for each screen here. Changes are saved for this store and take effect at the next sign-in.</p>
     <div className="shared-pins">{roles.map(role => <div className="shared-pin-row" key={role}>
-      <label className="toggle"><input type="checkbox" checked={Boolean(security?.pin?.[role])} disabled={!security?.pinSet?.[role]} onChange={event => void toggle(role, event.target.checked)} /> Allow shared {role} PIN</label>
+      <label className="toggle"><input type="checkbox" checked={Boolean(security?.pin?.[role])} disabled={!security?.pinSet?.[role]} onChange={event => void toggle(role, event.target.checked)} /> Allow shared {labels[role]} PIN</label>
       <button className="btn small" onClick={() => { setError(''); setEditing(role); }}>{security?.pinSet?.[role] ? 'Change PIN' : 'Set PIN'}</button>
     </div>)}</div>
     {editing && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setEditing(null); }}><section className="sheet" role="dialog" aria-modal="true" aria-label={`${labels[editing]} PIN`}>

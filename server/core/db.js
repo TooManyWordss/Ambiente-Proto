@@ -286,5 +286,9 @@ addMissingColumns('orders', {
 addMissingColumns('floor_tables', {
   bill_requested_at: 'TEXT', // a waiter asked the cashier to bill the party out; cleared when they pay
   bill_requested_by: 'TEXT',
+  bill_pay_by: 'TEXT',       // how the waiter says they'll pay: cash | card (the cashier can still change it)
 });
+// Each staff member's own code, set by the owner: typed with each bill out, order or stock change, it says who did it.
+addMissingColumns('staff', { code_hash: 'TEXT' });
+addMissingColumns('orders', { billed_by_name: 'TEXT' }); // the cashier whose code billed the table out
 }

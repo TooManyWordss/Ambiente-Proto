@@ -2,7 +2,7 @@ import { STOCK_KEEPERS } from '../core/config.js';
 import { db } from '../core/db.js';
 import { logActivity } from '../sales/orders.js';
 import { storeBroadcast } from '../core/http.js';
-const ROLE_LABEL = { pos: 'Cashier', barista: 'Barista', kitchen: 'Kitchen', inventory: 'Inventory', admin: 'Owner' };
+const ROLE_LABEL = { pos: 'Cashier', barista: 'Waiter', kitchen: 'Kitchen', inventory: 'Inspector', admin: 'Owner' };
 
 // ---------- Inventory ----------
 

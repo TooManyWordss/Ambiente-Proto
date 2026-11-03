@@ -6,7 +6,7 @@ export type Party = { seated_at: string; guests: number; customer_tag: string | 
   // The unpaid orders with their items (and any saved on this tablet while offline), for billing out offline.
   orders?: Order[];
   // A waiter asked the cashier to bill this party out (cleared when they pay).
-  bill_requested_at?: string | null; bill_requested_by?: string | null };
+  bill_requested_at?: string | null; bill_requested_by?: string | null; bill_pay_by?: 'cash' | 'card' | null };
 export type DiningTable = { id: number; name: string; seats: number; x: number; y: number; w: number; h: number; party: Party | null };
 export type TableChoice = { id: number; name: string; guests: number; tag: 'vip' | 'repeat' | null; seatedAt: string };
 // qty 0: linked, amount not entered yet (nothing comes out of stock).

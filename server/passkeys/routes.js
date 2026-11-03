@@ -12,7 +12,7 @@ import { app, storeBroadcast } from '../core/http.js';
 // The device checks the face or finger; the server only checks a signature against the
 // public key saved when the device was registered. Browsers allow this on HTTPS (or localhost) only.
 
-export const ROLE_LABEL = { admin: 'Owner', pos: 'Cashier', barista: 'Barista', kitchen: 'Kitchen', inventory: 'Inventory' };
+export const ROLE_LABEL = { admin: 'Owner', pos: 'Cashier', barista: 'Waiter', kitchen: 'Kitchen', inventory: 'Inspector' };
 
 // Passkeys belong to one web address. RP_ID / RP_ORIGIN override it when needed.
 export function relyingParty(req) {

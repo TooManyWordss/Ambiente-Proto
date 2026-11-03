@@ -8,7 +8,8 @@ import './dining.css';
 import DiscountEditor from './discount-editor';
 import { DishIngredients } from './inventory/RecipeEditor';
 import { api } from './shared/api';
-import { PayBy } from './shared/ui';
+import { PayBy, StaffCode } from './shared/ui';
+import { useCodeRequired } from './shared/hooks';
 
 const money = (n = 0) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n / 100);
 const when = (s?: string) => s ? new Date(s).toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
@@ -90,7 +91,15 @@ function SeatForm({ cache, tableId, busy, onSeat, onCancel }: { cache: Cache; ta
 function Visit({ visit: v, service }: { visit: any; service: Service }) {
   const state = service.state!, cache = service.cache!, bill = v.bill ?? totals(v, state.taxRate), open = v.status === 'open';
   const feedback = useDraft(`feedback:${v.id}`, v.feedback ?? '', cache);
-  const [editingLine, setEditingLine] = useState<any>(null), [showDetails, setShowDetails] = useState(false), [showDiscount, setShowDiscount] = useState(false), [cash, setCash] = useState(''), [payBy, setPayBy] = useState<'cash' | 'card'>('cash'), [cancelReason, setCancelReason] = useState('');
+  const [editingLine, setEditingLine] = useState<any>(null), [showDetails, setShowDetails] = useState(false), [showDiscount, setShowDiscount] = useState(false), [cash, setCash] = useState(''), [payBy, setPayBy] = useState<'cash' | 'card'>('cash'), [code, setCode] = useState(''), [cancelReason, setCancelReason] = useState('');
+  // The cashier signs each settlement with their staff code. Online it's checked first, so a typo shows at once;
+  // offline it goes with the payment and is checked when it syncs.
+  const needCode = useCodeRequired() && service.role === 'pos';
+  async function settle() {
+    if (needCode) { try { await api('/api/staff-codes/check', { method: 'POST', body: { staffCode: code }, redirectOnUnauthorized: false }); } catch (e) { if ((e as { status?: number }).status) return service.setError((e as Error).message); } }
+    await service.act('visit.settle', v.id, { payment_method: payBy, ...(payBy === 'cash' ? { cash_cents: Math.round(Number(cash) * 100) } : {}), total_cents: bill.total_cents, ...(needCode ? { staff_code: code } : {}) });
+    setCode('');
+  }
   return <section className="dining-visit"><header><h1>{v.table_name} <span className="pill">{v.status}</span></h1><p>{v.guests} guests · {v.alias} {v.vip && '· VIP'} {v.repeat && '· Repeat guest'} · {minutes(v.arrived_at, v.released_at ?? undefined)} min</p><button className="btn small" disabled={!open} onClick={() => setShowDetails(!showDetails)}>Edit party</button></header>
     {showDetails && <PartyForm key={v.version} visit={v} service={service} done={() => setShowDetails(false)}/>}
     <div className="dining-service-actions">{(['eating_started_at', 'eating_finished_at', 'bill_requested_at'] as const).map(event => <button className="btn" key={event} disabled={!open || !!v[event] || service.busy} onClick={() => void service.act('visit.event', v.id, { event })}>{labels[event]}{v[event] ? ` · ${when(v[event])}` : ''}</button>)}</div>
@@ -99,7 +108,7 @@ function Visit({ visit: v, service }: { visit: any; service: Service }) {
       {open && <OrderDraft key={v.id} visit={v} service={service}/>}
     </div><aside className="panel dining-bill"><h2>Bill</h2><dl className="totals"><dt>Subtotal</dt><dd>{money(bill.subtotal_cents)}</dd>{discountRows(v, bill, state.taxRate).map(l => <React.Fragment key={l.label}><dt>{l.label}</dt><dd>−{money(l.cents)}</dd></React.Fragment>)}<dt>Tax</dt><dd>{money(bill.tax_cents)}</dd><dt className="grand">Total</dt><dd className="grand">{money(bill.total_cents)}</dd></dl>{v.discount && <p>{v.discount.reason}</p>}
       {open && <><button className="btn" onClick={() => setShowDiscount(!showDiscount)}>Discount</button>{showDiscount && <DiscountForm visit={v} service={service} done={() => setShowDiscount(false)}/>}
-        <PayBy value={payBy} onChange={setPayBy}/>{payBy === 'cash' ? <><label>Cash received<input type="number" min="0" step="0.01" value={cash} onChange={e => setCash(e.target.value)}/></label><button className="btn small" onClick={() => setCash((bill.total_cents / 100).toFixed(2))}>Exact</button><p>Change: {money(Math.max(0, Math.round(Number(cash) * 100) - bill.total_cents))}</p></> : <p>Card payment: {money(bill.total_cents)}</p>}<button className="btn primary big" disabled={service.busy || !v.bill_requested_at || !linesOf(v).some(l => l.qty) || (payBy === 'cash' && Math.round(Number(cash) * 100) < bill.total_cents)} onClick={() => void service.act('visit.settle', v.id, { payment_method: payBy, ...(payBy === 'cash' ? { cash_cents: Math.round(Number(cash) * 100) } : {}), total_cents: bill.total_cents })}>{payBy === 'card' ? 'Settle card bill' : 'Settle cash bill'}</button>
+        <PayBy value={payBy} onChange={setPayBy}/>{payBy === 'cash' ? <><label>Cash received<input type="number" min="0" step="0.01" value={cash} onChange={e => setCash(e.target.value)}/></label><button className="btn small" onClick={() => setCash((bill.total_cents / 100).toFixed(2))}>Exact</button><p>Change: {money(Math.max(0, Math.round(Number(cash) * 100) - bill.total_cents))}</p></> : <p>Card payment: {money(bill.total_cents)}</p>}{needCode && <StaffCode value={code} onChange={setCode}/>}<button className="btn primary big" disabled={service.busy || !v.bill_requested_at || !linesOf(v).some(l => l.qty) || (payBy === 'cash' && Math.round(Number(cash) * 100) < bill.total_cents) || (needCode && code.length < 4)} onClick={() => void settle()}>{payBy === 'card' ? 'Settle card bill' : 'Settle cash bill'}</button>
         <details><summary>Cancel visit</summary><label>Cancellation reason<input maxLength={200} value={cancelReason} onChange={e => setCancelReason(e.target.value)}/></label><button className="btn danger" disabled={!cancelReason.trim() || service.busy} onClick={() => void service.act('visit.cancel', v.id, { reason: cancelReason })}>Cancel visit</button></details></>}
       {v.settled_at && <><p>{v.receipt_no ? `Order #${v.receipt_no}` : 'PROVISIONAL · awaiting synchronization'}</p><p>{v.payment_method === 'card' ? 'Paid by card' : <>Cash {money(v.cash_cents)} · Change {money(v.change_cents)}</>}</p><button className="btn" onClick={() => window.print()}>Print bill</button></>}
       {!open && !v.released_at && <button className="btn primary" disabled={service.busy} onClick={() => void service.act('visit.release', v.id, {})}>Release table</button>}

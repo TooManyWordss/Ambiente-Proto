@@ -59,6 +59,7 @@ app.get('/api/admin/sales-report', (req, res) => {
       tax_cents: o.tax_cents, total_cents: o.total_cents, cash_cents: o.cash_tendered_cents, change_cents: o.change_cents,
       paid_by: o.status === 'paid' ? (o.payment_method === 'card' ? 'Card' : 'Cash') : '',
       paid_time: o.status === 'paid' ? clockOf(o.paid_at ?? o.created_at) : '', staff: o.staff_name ?? '',
+      billed_by: o.billed_by_name ?? (o.visit_id && o.status === 'paid' ? o.staff_name ?? '' : ''),
       edits: o.edit_count ?? 0, void_reason: o.status === 'voided' ? o.void_reason ?? '' : '',
     };
   });

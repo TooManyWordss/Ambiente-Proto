@@ -14,8 +14,10 @@ app.get('/api/inventory', (req, res) => res.json(inventoryItems()));
 const KINDS = ['ingredient', 'portion', 'supply'];
 const sectionOf = (value) => typeof value === 'string' && value.trim() ? value.trim().slice(0, 40) : null;
 
-// Staff and the owner add an item with its current stock and the level to reorder at.
+// The owner adds an item with its current stock and the level to reorder at. The inspector (the inventory
+// login) counts and edits what's there but doesn't add items.
 app.post('/api/inventory/items', (req, res) => {
+  if (req.role !== 'admin') return res.status(403).json({ error: 'Only the owner adds stock items. Ask the owner.' });
   const { name, unit, quantity, threshold, kind = 'ingredient' } = req.body ?? {};
   const problem = inventoryProblem({ name, unit });
   if (problem) return res.status(400).json({ error: problem });
@@ -73,6 +75,20 @@ app.get('/api/admin/inventory', (req, res) => {
       ORDER BY l.id DESC LIMIT 40`
   ).all();
   res.json({ items: inventoryItems(), log });
+});
+
+// The inspector or the owner sets the level an item is reordered at. Dropping below it alerts the owner.
+app.patch('/api/inventory/:id', (req, res) => {
+  const item = db.prepare('SELECT * FROM inventory_items WHERE id = ? AND active = 1').get(Number(req.params.id));
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const threshold = req.body?.threshold;
+  if (!isQty(threshold)) return res.status(400).json({ error: 'Enter the level to reorder at' });
+  db.prepare('UPDATE inventory_items SET threshold = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+    .run(roundQty(threshold), new Date().toISOString(), req.staff?.name ?? ROLE_LABEL[req.role], item.id);
+  const updated = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(item.id);
+  if (updated.threshold !== item.threshold) logStock(req, updated, 'edited', 0, `Reorder level ${qtyText(item, item.threshold)} → ${qtyText(updated, updated.threshold)}`);
+  announceStock(req, item, updated);
+  res.json({ ...updated, low: isLow(updated) });
 });
 
 // Owner: rename, change the unit, the reorder level, the sheet section, or whether it's a portion.

@@ -4,7 +4,8 @@ import DiscountEditor from '../discount-editor';
 import { api } from '../shared/api';
 import { money, rid, time } from '../shared/format';
 import type { DiningTable, Order } from '../shared/types';
-import { Dialog, PayBy } from '../shared/ui';
+import { Dialog, PayBy, StaffCode } from '../shared/ui';
+import { useCodeRequired } from '../shared/hooks';
 
 // A table's bill as receipt data: unpaid (printed as the bill to check), or paid (the receipt).
 export type TableReceipt = Record<string, any>;
@@ -17,9 +18,11 @@ export function billReceipt(table: DiningTable, orders: Order[], discount: any, 
 
 // Bill out: what the table ordered, any discount (seniors and PWDs by group share), the cash, and the receipt.
 // Without a connection it bills from the copy on this tablet, and the payment sends by itself later.
-export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOffline, onFree }: { table: DiningTable; taxRate: number; onClose: () => void; onPrintBill: (r: TableReceipt) => void; onPaid: (r: TableReceipt) => void; onPaidOffline: (p: OfflinePayment) => void; onFree: () => void }) {
+export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOffline, onFree }: { table: DiningTable; taxRate: number; onClose: () => void; onPrintBill: (r: TableReceipt) => void; onPaid: (r: TableReceipt) => void; onPaidOffline: (p: OfflinePayment) => void; onFree: (staffCode: string) => void }) {
   const [orders, setOrders] = useState<Order[] | null>(null), [error, setError] = useState(''), [discount, setDiscount] = useState<any>(null), [discountOpen, setDiscountOpen] = useState(false);
-  const [cash, setCash] = useState(''), [saving, setSaving] = useState(false), [billId] = useState(rid), [offline, setOffline] = useState(false), [payBy, setPayBy] = useState<'cash' | 'card'>('cash');
+  const [cash, setCash] = useState(''), [saving, setSaving] = useState(false), [billId] = useState(rid), [offline, setOffline] = useState(false), [payBy, setPayBy] = useState<'cash' | 'card'>(table.party?.bill_pay_by === 'card' ? 'card' : 'cash');
+  // Every bill out is signed with the cashier's own staff code, once the owner has given cashiers codes.
+  const needCode = useCodeRequired(), [code, setCode] = useState(''), coded = !needCode || code.length >= 4;
   // Orders saved on this tablet while offline aren't on the server yet, but they're on the bill.
   const saved = table.party?.orders?.filter(o => o.offline) ?? [];
   useEffect(() => {
@@ -33,9 +36,9 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
   const lines = bill && discount ? discountLines(bill.subtotal_cents, discount, taxRate) : [];
   const paid = Math.round((Number(cash.replace(/,/g, '')) || 0) * 100), total = bill?.total_cents ?? 0, change = paid - total, card = payBy === 'card', covered = card || paid >= total;
   async function pay() {
-    if (!bill || !covered || saving) return;
+    if (!bill || !covered || !coded || saving) return;
     setSaving(true); setError('');
-    const body = { billId, discount, paymentMethod: payBy, cashTenderedCents: card ? null : paid, totalCents: total, paidAt: new Date().toISOString() };
+    const body = { billId, discount, paymentMethod: payBy, cashTenderedCents: card ? null : paid, totalCents: total, paidAt: new Date().toISOString(), ...(needCode ? { staffCode: code } : {}) };
     const later = () => onPaidOffline({ tableId: table.id, body, receipt: { ...billReceipt(table, orders!, discount, taxRate), heading: undefined, offline: true, payment_method: payBy, cash_tendered_cents: card ? null : paid, change_cents: card ? null : change } });
     // A bill with orders still waiting to send is paid after them, in the order they were taken.
     if (offline || saved.length) return later();
@@ -54,7 +57,7 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
       <p className="hint">{table.party ? `${table.party.guests ? `${table.party.guests} guests · ` : ''}seated ${time(table.party.seated_at)}` : ''}</p>
       {!orders && !error && <p className="hint">Opening the bill…</p>}
       {offline && <p className="status warn">No connection: this is the bill saved on this tablet. Take the payment as usual; it sends by itself when the connection is back.</p>}
-      {orders && !orders.length && <><p className="confirm-text">{table.name} has nothing left to pay.</p><div className="sheet-actions"><button className="btn" onClick={onClose}>Close</button><button className="btn primary" onClick={onFree}>Free the table</button></div></>}
+      {orders && !orders.length && <><p className="confirm-text">{table.name} has nothing left to pay.</p>{needCode && <StaffCode value={code} onChange={setCode}/>}<div className="sheet-actions"><button className="btn" onClick={onClose}>Close</button><button className="btn primary" disabled={!coded} onClick={() => onFree(code)}>Free the table</button></div></>}
       {orders && orders.length > 0 && bill && <>
         <ul className="bill-orders">{orders.map(o => <li key={o.id}><div className="bill-order-head"><strong>#{o.receipt_label}</strong><span>{time(o.created_at)}</span></div>
           {o.items.filter(i => i.qty > 0).map(i => <div className="bill-line" key={i.id}><span>{i.qty} × {i.name}{i.note && <small className="line-note-text">{i.note}</small>}</span><span>{money(i.qty * (i.unit_price_cents ?? 0))}</span></div>)}</li>)}</ul>
@@ -70,12 +73,14 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
           <button className="btn" onClick={() => onPrintBill(billReceipt(table, orders, discount, taxRate))}>Print bill</button>
         </div>
         <div className="pay-area">
+          {table.party?.bill_pay_by && <p className="hint">The waiter says they’ll pay by {table.party.bill_pay_by}.</p>}
           <PayBy value={payBy} onChange={setPayBy}/>
           {card ? <div className="change-row"><span>Card payment</span><strong>{money(total)}</strong></div> : <>
           <div className="tender"><label htmlFor="bill-cash">Cash received</label><button className="link" onClick={() => setCash('')}>Reset</button><input id="bill-cash" inputMode="decimal" placeholder="0.00" value={cash} onChange={e => setCash(e.target.value)}/></div>
           <div className="quick-cash">{[1000, 500, 200, 100, 50, 20, 10, 5, 1].map(d => <button className="cash-btn" key={d} onClick={() => setCash(String((Number(cash) || 0) + d))}>₱{d.toLocaleString('en-PH')}</button>)}<button className="cash-btn exact" onClick={() => setCash((total / 100).toFixed(2))}>Exact</button></div>
           <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div></>}
-          <button className="btn primary big" disabled={!covered || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print'}</button>
+          {needCode && <StaffCode value={code} onChange={setCode}/>}
+          <button className="btn primary big" disabled={!covered || !coded || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print'}</button>
         </div>
       </>}
       {error && <p className="status error" role="alert">{error}</p>}

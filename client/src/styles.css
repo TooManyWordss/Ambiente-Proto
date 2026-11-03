@@ -557,3 +557,5 @@ body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:
 /* A waiter asked for a table's bill: shown on the cashier's till until it's billed out or dismissed. */
 .bill-requests{display:grid;gap:6px;margin:0 0 10px}
 .bill-request{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border:2px solid var(--accent);border-radius:12px;background:var(--surface)}
+/* Stock below its reorder level, shown at the top of every admin page until it's restocked. */
+.low-stock-alert{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0 0 14px;padding:10px 14px;border:2px solid var(--warn,#c47b12);border-radius:12px;background:color-mix(in srgb,var(--warn,#c47b12) 10%,var(--surface))}
