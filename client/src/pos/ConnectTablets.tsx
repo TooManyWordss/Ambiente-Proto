@@ -18,7 +18,7 @@ export function ConnectTablets({ onClose }: { onClose: () => void }) {
   useEffect(() => { if (local) void api<{ lanUrl: string | null }>('/api/connect-info').then(d => setBase(d.lanUrl ? d.lanUrl + BASE : '')).catch(() => setBase('')); }, [local]);
   const url = base ? `${base}/${screen}` : '';
   return <Dialog title="Connect another tablet" onClose={onClose}>
-    <div className="perf-units" role="tablist">{([['kitchen', 'Kitchen'], ['barista', 'Barista'], ['admin', 'Owner']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={screen === k} className={`chip ${screen === k ? 'active' : ''}`} onClick={() => setScreen(k)}>{l}</button>)}</div>
+    <div className="perf-units" role="tablist">{([['kitchen', 'Kitchen'], ['barista', 'Waiter'], ['admin', 'Owner']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={screen === k} className={`chip ${screen === k ? 'active' : ''}`} onClick={() => setScreen(k)}>{l}</button>)}</div>
     {base === null ? <p className="hint">Finding this tablet's address…</p> : url ? <>
       <QrCode text={url} />
       <ol className="connect-steps"><li>Connect the other tablet to the <strong>same Wi‑Fi</strong> as this one.</li><li>Open its <strong>camera</strong> and point it at the code, then tap the link.</li><li>Sign in with the screen's PIN.</li></ol>

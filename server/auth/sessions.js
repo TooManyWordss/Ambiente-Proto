@@ -13,7 +13,8 @@ export const isRole = (role) => typeof role === 'string' && Object.hasOwn(SECRET
 export const can = (role, ...needs) => role === 'admin' || needs.includes(role);
 
 // The two tills. Each keeps its own receipts, numbering and "today" view.
-export const STATION_OF_ROLE = { pos: 'cashier', barista: 'barista' };
+// The waiter (the barista login) takes table orders for the cashier, who bills them out at the till.
+export const STATION_OF_ROLE = { pos: 'cashier', barista: 'cashier' };
 export const SELLERS = ['pos', 'barista'];
 // The cashier or barista always sells from their own till; the owner says which screen they're on.
 export const stationOf = (req, asked) => STATION_OF_ROLE[req.role] ?? (asked === 'barista' ? 'barista' : 'cashier');

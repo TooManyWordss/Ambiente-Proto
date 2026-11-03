@@ -4,7 +4,7 @@ import DiscountEditor from '../discount-editor';
 import { api } from '../shared/api';
 import { money, rid, time } from '../shared/format';
 import type { DiningTable, Order } from '../shared/types';
-import { Dialog } from '../shared/ui';
+import { Dialog, PayBy } from '../shared/ui';
 
 // A table's bill as receipt data: unpaid (printed as the bill to check), or paid (the receipt).
 export type TableReceipt = Record<string, any>;
@@ -19,7 +19,7 @@ export function billReceipt(table: DiningTable, orders: Order[], discount: any, 
 // Without a connection it bills from the copy on this tablet, and the payment sends by itself later.
 export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOffline, onFree }: { table: DiningTable; taxRate: number; onClose: () => void; onPrintBill: (r: TableReceipt) => void; onPaid: (r: TableReceipt) => void; onPaidOffline: (p: OfflinePayment) => void; onFree: () => void }) {
   const [orders, setOrders] = useState<Order[] | null>(null), [error, setError] = useState(''), [discount, setDiscount] = useState<any>(null), [discountOpen, setDiscountOpen] = useState(false);
-  const [cash, setCash] = useState(''), [saving, setSaving] = useState(false), [billId] = useState(rid), [offline, setOffline] = useState(false);
+  const [cash, setCash] = useState(''), [saving, setSaving] = useState(false), [billId] = useState(rid), [offline, setOffline] = useState(false), [payBy, setPayBy] = useState<'cash' | 'card'>('cash');
   // Orders saved on this tablet while offline aren't on the server yet, but they're on the bill.
   const saved = table.party?.orders?.filter(o => o.offline) ?? [];
   useEffect(() => {
@@ -31,12 +31,12 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
   }, [table.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const bill = useMemo(() => { try { return orders?.length ? tableBill(orders, discount, taxRate) : null; } catch { return null; } }, [orders, discount, taxRate]);
   const lines = bill && discount ? discountLines(bill.subtotal_cents, discount, taxRate) : [];
-  const paid = Math.round((Number(cash.replace(/,/g, '')) || 0) * 100), total = bill?.total_cents ?? 0, change = paid - total;
+  const paid = Math.round((Number(cash.replace(/,/g, '')) || 0) * 100), total = bill?.total_cents ?? 0, change = paid - total, card = payBy === 'card', covered = card || paid >= total;
   async function pay() {
-    if (!bill || paid < total || saving) return;
+    if (!bill || !covered || saving) return;
     setSaving(true); setError('');
-    const body = { billId, discount, cashTenderedCents: paid, totalCents: total, paidAt: new Date().toISOString() };
-    const later = () => onPaidOffline({ tableId: table.id, body, receipt: { ...billReceipt(table, orders!, discount, taxRate), heading: undefined, offline: true, cash_tendered_cents: paid, change_cents: change } });
+    const body = { billId, discount, paymentMethod: payBy, cashTenderedCents: card ? null : paid, totalCents: total, paidAt: new Date().toISOString() };
+    const later = () => onPaidOffline({ tableId: table.id, body, receipt: { ...billReceipt(table, orders!, discount, taxRate), heading: undefined, offline: true, payment_method: payBy, cash_tendered_cents: card ? null : paid, change_cents: card ? null : change } });
     // A bill with orders still waiting to send is paid after them, in the order they were taken.
     if (offline || saved.length) return later();
     try {
@@ -70,10 +70,12 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
           <button className="btn" onClick={() => onPrintBill(billReceipt(table, orders, discount, taxRate))}>Print bill</button>
         </div>
         <div className="pay-area">
+          <PayBy value={payBy} onChange={setPayBy}/>
+          {card ? <div className="change-row"><span>Card payment</span><strong>{money(total)}</strong></div> : <>
           <div className="tender"><label htmlFor="bill-cash">Cash received</label><button className="link" onClick={() => setCash('')}>Reset</button><input id="bill-cash" inputMode="decimal" placeholder="0.00" value={cash} onChange={e => setCash(e.target.value)}/></div>
           <div className="quick-cash">{[1000, 500, 200, 100, 50, 20, 10, 5, 1].map(d => <button className="cash-btn" key={d} onClick={() => setCash(String((Number(cash) || 0) + d))}>₱{d.toLocaleString('en-PH')}</button>)}<button className="cash-btn exact" onClick={() => setCash((total / 100).toFixed(2))}>Exact</button></div>
-          <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div>
-          <button className="btn primary big" disabled={paid < total || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print'}</button>
+          <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div></>}
+          <button className="btn primary big" disabled={!covered || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print'}</button>
         </div>
       </>}
       {error && <p className="status error" role="alert">{error}</p>}

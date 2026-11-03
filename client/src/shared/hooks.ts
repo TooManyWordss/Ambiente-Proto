@@ -53,7 +53,7 @@ export function useLive(onEvent?: (event: string, data: any) => void, asks?: Liv
     socket.on('screen.check', (answer?: (r: object) => void) => answer?.(asked.current?.status?.() ?? {}));
     socket.on('slips.takeover', async (data: any, answer?: (r: object) => void) => answer?.({ ok: await (asked.current?.takeover?.(data) ?? Promise.resolve(false)).catch(() => false) }));
     socket.on('connect_error', (e) => { setState('Offline'); if (e.message === 'unauthorized') { clearCachedSessions(); location.href = storeUrl(`/login?role=${roleFromPath()}`); } });
-    const events = ['order.created','order.updated','ticket.updated','menu.requested','menu.updated','inventory.updated','inventory.low','security.updated','stores.updated','tables.updated','dining.updated','screens.updated','pickup.updated'];
+    const events = ['order.created','order.updated','ticket.updated','menu.requested','menu.updated','inventory.updated','inventory.low','security.updated','stores.updated','tables.updated','dining.updated','screens.updated','pickup.updated','bill.requested','slips.unprinted'];
     events.forEach((event) => socket.on(event, (data) => { if(['dining.updated','tables.updated','order.created','order.updated','ticket.updated','pickup.updated'].includes(event)) window.dispatchEvent(new Event('dining.live')); onEvent?.(event, data); }));
     return () => { socket.disconnect(); };
   }, [onEvent]);

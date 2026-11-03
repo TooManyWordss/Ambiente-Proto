@@ -182,9 +182,13 @@ test('table lifecycle, offline conflicts, readiness, refunds, and business undo'
       assert.equal((await request(`/api/dining/business-undo/${consumed.data.undoId}`, inventory, {})).status, 409);
       assert.equal((await request(`/api/dining/business-undo/${received.data.undoId}`, inventory, {})).status, 200);
       assert.equal((await request('/api/inventory', inventory)).data.find(i => i.id === stock.data.id).quantity, 10);
-      const b = await request('/api/orders', barista, { clientId: id(), station: 'barista', items: [{ menuItemId: current.id, qty: 1 }], cashTenderedCents: current.price_cents * 2 });
-      assert.match(b.data.receipt_label, /^B-/);
-      assert.equal((await request(`/api/dining/business-undo/${b.data.undoId}`, barista, {})).status, 200);
+      // The barista login is the waiter's panel: it can't take payment, only send table orders (on the cashier's numbers).
+      assert.equal((await request('/api/orders', barista, { clientId: id(), items: [{ menuItemId: current.id, qty: 1 }], cashTenderedCents: current.price_cents * 2 })).status, 403);
+      const floorTable = (await request('/api/tables', barista)).data[0];
+      const b = await request('/api/orders', barista, { clientId: id(), payLater: true, table: { tableId: floorTable.id, guests: 2 }, items: [{ menuItemId: current.id, qty: 1 }] });
+      assert.equal(b.status, 201);
+      assert.doesNotMatch(b.data.receipt_label, /^B-/);
+      assert.equal((await request(`/api/dining/business-undo/${b.data.undoId}`, barista, {})).status, 403, 'the waiter can’t take back an order; the cashier can');
     });
     await t.test('counter discounts, stable receipt lines, discount-only edits, and chained undo', async () => {
       const current = (await snapshot()).menu.find(m => m.id === item.id);

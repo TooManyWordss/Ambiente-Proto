@@ -1,5 +1,5 @@
 import { currentStore } from '../core/config.js';
-import { prepStation, totals as diningTotals } from '../../dining-domain.js';
+import { paymentMethod, prepStation, totals as diningTotals } from '../../dining-domain.js';
 import { TAX_RATE } from '../core/config.js';
 import { receiptLabel, requireRole, SELLERS, stationOf } from '../auth/sessions.js';
 import { dayRange, localDate, money } from '../core/dates.js';
@@ -9,6 +9,7 @@ import { app, notifyOwnerOverview, storeBroadcast } from '../core/http.js';
 import { applyRecipes } from '../inventory/routes.js';
 import { announceTables, openTableOrders } from '../tables/routes.js';
 import { byWeight, weighedLine } from '../../weighed.js';
+import { printWaiterSlips } from '../kitchen/slips.js';
 
 // ---------- Sales ----------
 
@@ -35,6 +36,8 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   // A table's order can be paid later, at bill out: it goes to the kitchen now, and the discount and cash come then.
   const payLater = req.body?.payLater === true;
   if (payLater && !req.body?.table) return res.status(400).json({ error: 'Only a table’s order can be paid at bill out' });
+  // The waiter only sends orders to a table; the cashier takes the payment at bill out.
+  if (req.role === 'barista' && !payLater) return res.status(403).json({ error: 'Waiters send orders to a table. The cashier takes payment.' });
   const discount = currentStore() === 'ambiente' && !payLater ? req.body?.discount ?? null : null;
   const station = stationOf(req, req.body?.station);
   if (typeof clientId !== 'string' || clientId.length === 0 || clientId.length > 100) {
@@ -72,8 +75,10 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   try { bill = diningTotals({ discount, submissions: [{ lines: lines.map(l => ({ qty: l.qty, unit_price_cents: l.unit_price_cents })) }] }, TAX_RATE); }
   catch (e) { return res.status(400).json({ error: e.message }); }
   const { subtotal_cents: subtotal, tax_cents: tax, total_cents: total } = bill;
+  // Paid by card: no cash changes hands, so there's no cash received or change.
+  const paidBy = paymentMethod(req.body?.paymentMethod);
   let tendered = null;
-  if (!payLater && cashTenderedCents !== undefined && cashTenderedCents !== null) {
+  if (!payLater && paidBy === 'cash' && cashTenderedCents !== undefined && cashTenderedCents !== null) {
     if (!Number.isInteger(cashTenderedCents) || cashTenderedCents < 0) {
       return res.status(400).json({ error: 'Invalid cash amount' });
     }
@@ -111,9 +116,9 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
           `INSERT INTO orders (client_id, station, receipt_no, created_at, payment_method, subtotal_cents, tax_cents,
              total_cents, kitchen_status, cash_tendered_cents, change_cents, staff_id, staff_name,
              table_id, table_name, guests, customer_tag, seated_at, discount_cents, discount_json, status)
-           VALUES (?, ?, ?, ?, 'cash', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(clientId, station, next, rungUpAt, subtotal, tax, total, kitchenStatus, tendered,
+        .run(clientId, station, next, rungUpAt, payLater ? 'cash' : paidBy, subtotal, tax, total, kitchenStatus, tendered,
           tendered === null ? null : tendered - total, req.staff?.id ?? null, req.staff?.name ?? null,
           table?.id ?? null, table?.name ?? null, guests, customerTag, seatedAt, bill.discount_cents, JSON.stringify(discount), payLater ? 'open' : 'paid')
         .lastInsertRowid
@@ -140,12 +145,14 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   if (order.table_id) announceTables();
   notifyOwnerOverview();
   res.status(201).json(order);
+  if (req.role === 'barista') void printWaiterSlips(order).catch(() => {});
 });
 
 // Cashiers and baristas may change or void today's receipts from their own till; the owner may change any.
 export function changeProblem(order, req) {
   if (!order) return [404, 'Order not found'];
   if (order.status === 'voided') return [409, `Order #${order.receipt_label} is already voided`];
+  if (req.role === 'barista') return [403, 'Waiters can’t change or void orders. Ask the cashier.'];
   if (req.role !== 'admin' && order.station !== stationOf(req)) {
     return [403, `Order #${order.receipt_label} belongs to the ${order.station === 'barista' ? 'barista bar' : 'cashier'}. Change it there.`];
   }

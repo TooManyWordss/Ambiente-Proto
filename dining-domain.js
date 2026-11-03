@@ -90,6 +90,8 @@ export function totals(visit, taxRate = 0) {
 // One bill for a table's orders, paid together at bill out. The discount and tax are worked out on the
 // whole bill, then shared across its orders by their subtotals, so the orders' own numbers add up to it.
 // A fixed discount is kept on each order as its part of the amount; other discounts apply to each as they are.
+// How the customer paid: by card, or in cash (anything else, including older records without a choice).
+export const paymentMethod = (value) => value === 'card' ? 'card' : 'cash';
 export function tableBill(orders, discount, taxRate = 0) {
   const bill = totals({ discount, submissions: orders.map(o => ({ lines: o.items })) }, taxRate);
   let discountLeft = bill.discount_cents, taxLeft = bill.tax_cents;
@@ -255,10 +257,12 @@ export function applyDining(input, operation, context) {
     if (!linesOf(visit).some(l => l.qty > 0)) fail('Cannot settle an empty bill');
     if (!visit.bill_requested_at) fail('Request the bill before settlement');
     visit.bill = totals(visit, context.taxRate);
-    integer(p.cash_cents, 'cash tendered', visit.bill.total_cents);
+    // Paid by card: the card covers the bill exactly, so there's no cash or change to record.
+    visit.payment_method = paymentMethod(p.payment_method);
+    if (visit.payment_method === 'cash') integer(p.cash_cents, 'cash tendered', visit.bill.total_cents);
     // Detect an offline bill that no longer matches the authoritative total.
     if (p.total_cents !== visit.bill.total_cents) fail('Bill total changed. Review the recorded cash and current bill.', 409);
-    visit.cash_cents = p.cash_cents; visit.change_cents = p.cash_cents - visit.bill.total_cents;
+    visit.cash_cents = visit.payment_method === 'cash' ? p.cash_cents : null; visit.change_cents = visit.payment_method === 'cash' ? p.cash_cents - visit.bill.total_cents : null;
     visit.status = 'settled'; visit.settled_at = at;
   } else if (type === 'visit.cancel') {
     editable(); visit.cancel_reason = text(p.reason, 'cancellation reason'); visit.status = 'cancelled'; visit.cancelled_at = at;

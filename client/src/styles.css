@@ -552,4 +552,8 @@ body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:
   .report-print tr{break-inside:avoid}
   .report-print .rp-orders tr.voided{color:#777;text-decoration:line-through}
 }
-
+/* Cash or Card, chosen by the cashier before taking payment. */
+.pay-by{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+/* A waiter asked for a table's bill: shown on the cashier's till until it's billed out or dismissed. */
+.bill-requests{display:grid;gap:6px;margin:0 0 10px}
+.bill-request{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border:2px solid var(--accent);border-radius:12px;background:var(--surface)}

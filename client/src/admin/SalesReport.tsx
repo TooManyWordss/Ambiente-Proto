@@ -7,9 +7,9 @@ import { STORE, STORE_NAME } from '../shared/store';
 import { downloadWorkbook, type Cell, type Sheet } from '../shared/xlsx';
 
 type Line = { name: string; category: string; qty: number; unit_price_cents: number; note: string };
-type Row = { order: string; status: 'paid' | 'open' | 'voided'; station: string; date: string; day: string; hour: string; time: string; table: string; guests: number | null; customer: string; items: Line[]; item_count: number; subtotal_cents: number; discount_cents: number; discount: string; tax_cents: number; total_cents: number; cash_cents: number | null; change_cents: number | null; paid_time: string; staff: string; edits: number; void_reason: string };
+type Row = { order: string; status: 'paid' | 'open' | 'voided'; station: string; date: string; day: string; hour: string; time: string; table: string; guests: number | null; customer: string; items: Line[]; item_count: number; subtotal_cents: number; discount_cents: number; discount: string; tax_cents: number; total_cents: number; cash_cents: number | null; change_cents: number | null; paid_by: '' | 'Cash' | 'Card'; paid_time: string; staff: string; edits: number; void_reason: string };
 type Totals = { orders: number; guests: number; items: number; gross_cents: number; net_cents: number; discount_cents: number; tax_cents: number };
-export type SalesReportData = { from: string; to: string; summary: Totals & { average_order_cents: number; voided: number; voided_cents: number; unpaid: number; edited: number }; byDay: (Totals & { date: string; day: string })[]; byHour: (Totals & { hour: string })[]; bestSellers: { name: string; category: string; qty: number; revenue_cents: number }[]; orders: Row[] };
+export type SalesReportData = { from: string; to: string; summary: Totals & { average_order_cents: number; cash_cents: number; card_cents: number; voided: number; voided_cents: number; unpaid: number; edited: number }; byDay: (Totals & { date: string; day: string })[]; byHour: (Totals & { hour: string })[]; bestSellers: { name: string; category: string; qty: number; revenue_cents: number }[]; orders: Row[] };
 type Average = { count: number; average_minutes: number | null };
 type Service = { paid_visits: number; guests_served: number; net_sales_cents: number; average_spend_cents: number | null } & Record<string, Average | number | null>;
 
@@ -31,6 +31,7 @@ export function reportSheets(r: SalesReportData, service: Service | null): Sheet
       ['Gross sales', peso(s.gross_cents), 'What customers paid, tax included'],
       ['Paid orders', s.orders], ['Average order', peso(s.average_order_cents), 'Gross sales ÷ paid orders'],
       ['Guests', s.guests, 'From table orders; counter orders have no guest count'], ['Items sold', s.items],
+      ['Paid in cash', peso(s.cash_cents)], ['Paid by card', peso(s.card_cents)],
       ['Discounts', peso(s.discount_cents)], ['Tax', peso(s.tax_cents)],
       ['Voided orders', s.voided], ['Voided amount', peso(s.voided_cents), 'Not counted in sales'],
       ['Unpaid table orders', s.unpaid, 'Still on a table’s tab; counted when paid'], ['Edited orders', s.edited],
@@ -40,8 +41,8 @@ export function reportSheets(r: SalesReportData, service: Service | null): Sheet
         ...SERVICE_TIMES.map(([key, label]) => [`${label} (minutes)`, minutes(service[key] as Average), `${(service[key] as Average | undefined)?.count ?? 0} complete samples`])] : []),
     ] },
     { name: 'Orders', rows: [
-      ['Order #', 'Date', 'Day', 'Hour', 'Time', 'Station', 'Table', 'Guests', 'Customer', 'What they ordered', 'Items', 'Subtotal', 'Discount', 'Discount type', 'Tax', 'Total', 'Cash', 'Change', 'Status', 'Paid at', 'Staff', 'Times edited', 'Void reason'],
-      ...r.orders.map((o) => [o.order, o.date, o.day, o.hour, o.time, o.station, o.table, o.guests, o.customer, ordered(o), o.item_count, peso(o.subtotal_cents), peso(o.discount_cents), o.discount, peso(o.tax_cents), peso(o.total_cents), peso(o.cash_cents), peso(o.change_cents), STATUS[o.status], o.paid_time, o.staff, o.edits || '', o.void_reason]),
+      ['Order #', 'Date', 'Day', 'Hour', 'Time', 'Station', 'Table', 'Guests', 'Customer', 'What they ordered', 'Items', 'Subtotal', 'Discount', 'Discount type', 'Tax', 'Total', 'Paid by', 'Cash', 'Change', 'Status', 'Paid at', 'Staff', 'Times edited', 'Void reason'],
+      ...r.orders.map((o) => [o.order, o.date, o.day, o.hour, o.time, o.station, o.table, o.guests, o.customer, ordered(o), o.item_count, peso(o.subtotal_cents), peso(o.discount_cents), o.discount, peso(o.tax_cents), peso(o.total_cents), o.paid_by, peso(o.cash_cents), peso(o.change_cents), STATUS[o.status], o.paid_time, o.staff, o.edits || '', o.void_reason]),
     ], widths: [9, 11, 11, 7, 7, 9, 14, 8, 9, 60] },
     { name: 'Items sold', rows: [
       ['Order #', 'Date', 'Day', 'Time', 'Table', 'Item', 'Category', 'Qty', 'Unit price', 'Line total', 'Note', 'Status'],
@@ -84,15 +85,15 @@ function PrintedReport({ r, service }: { r: SalesReportData; service: Service | 
   const s = r.summary;
   return <div className="report-print">
     <h1>{STORE_NAME} · Sales report</h1><p>{r.from === r.to ? r.from : `${r.from} to ${r.to}`} · Asia/Manila · printed {new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}</p>
-    <div className="rp-figures">{([['Net sales', money(s.net_cents)], ['Gross sales', money(s.gross_cents)], ['Paid orders', s.orders], ['Average order', money(s.average_order_cents)], ['Guests', s.guests], ['Items sold', s.items], ['Discounts', money(s.discount_cents)], ['Tax', money(s.tax_cents)], ['Voided', `${s.voided} · ${money(s.voided_cents)}`]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
+    <div className="rp-figures">{([['Net sales', money(s.net_cents)], ['Gross sales', money(s.gross_cents)], ['Paid orders', s.orders], ['Average order', money(s.average_order_cents)], ['Guests', s.guests], ['Items sold', s.items], ['Discounts', money(s.discount_cents)], ['Tax', money(s.tax_cents)], ['Cash', money(s.cash_cents)], ['Card', money(s.card_cents)], ['Voided', `${s.voided} · ${money(s.voided_cents)}`]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
     {service && <><h2>Table service</h2><div className="rp-figures">{([['Paid visits', service.paid_visits], ['Guests served', service.guests_served], ['Spend per guest', service.average_spend_cents == null ? '—' : money(service.average_spend_cents)], ...SERVICE_TIMES.map(([key, label]) => [label, minutes(service[key] as Average) === '' ? '—' : `${minutes(service[key] as Average)} min`])] as [string, string | number][]).map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></>}
     <div className="rp-columns">
       <table><caption>By day</caption><thead><tr><th>Date</th><th>Day</th><th>Orders</th><th>Guests</th><th>Gross</th></tr></thead><tbody>{r.byDay.map((d) => <tr key={d.date}><td>{d.date}</td><td>{d.day}</td><td>{d.orders}</td><td>{d.guests}</td><td>{money(d.gross_cents)}</td></tr>)}</tbody></table>
       <table><caption>By hour</caption><thead><tr><th>Hour</th><th>Orders</th><th>Gross</th></tr></thead><tbody>{r.byHour.map((h) => <tr key={h.hour}><td>{h.hour}</td><td>{h.orders}</td><td>{money(h.gross_cents)}</td></tr>)}</tbody></table>
       <table><caption>Best sellers</caption><thead><tr><th>Item</th><th>Qty</th><th>Sales</th></tr></thead><tbody>{r.bestSellers.slice(0, 15).map((b) => <tr key={b.name}><td>{b.name}</td><td>{b.qty}</td><td>{money(b.revenue_cents)}</td></tr>)}</tbody></table>
     </div>
-    <table className="rp-orders"><caption>Orders ({r.orders.length})</caption><thead><tr><th>Order #</th><th>Date</th><th>Day</th><th>Time</th><th>Table</th><th>Guests</th><th>What they ordered</th><th>Total</th><th>Status</th></tr></thead>
-      <tbody>{r.orders.map((o) => <tr key={`${o.station}-${o.order}`} className={o.status}><td>{o.order}</td><td>{o.date}</td><td>{o.day.slice(0, 3)}</td><td>{o.time}</td><td>{o.table}</td><td>{o.guests ?? ''}</td><td>{ordered(o)}</td><td>{money(o.total_cents)}</td><td>{STATUS[o.status]}</td></tr>)}</tbody></table>
+    <table className="rp-orders"><caption>Orders ({r.orders.length})</caption><thead><tr><th>Order #</th><th>Date</th><th>Day</th><th>Time</th><th>Table</th><th>Guests</th><th>What they ordered</th><th>Total</th><th>Paid by</th><th>Status</th></tr></thead>
+      <tbody>{r.orders.map((o) => <tr key={`${o.station}-${o.order}`} className={o.status}><td>{o.order}</td><td>{o.date}</td><td>{o.day.slice(0, 3)}</td><td>{o.time}</td><td>{o.table}</td><td>{o.guests ?? ''}</td><td>{ordered(o)}</td><td>{money(o.total_cents)}</td><td>{o.paid_by}</td><td>{STATUS[o.status]}</td></tr>)}</tbody></table>
     {!r.orders.length && <p>No orders in these days.</p>}
   </div>;
 }

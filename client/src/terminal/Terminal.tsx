@@ -4,7 +4,7 @@ import { STORE_NAME, storeUrl } from '../shared/store';
 import type { Role } from '../shared/types';
 import { Logo } from '../shared/ui';
 
-const SCREENS: [Role, string][] = [['pos', 'POS'], ['kitchen', 'Kitchen'], ['barista', 'Barista'], ['inventory', 'Inventory'], ['admin', 'Admin']];
+const SCREENS: [Role, string][] = [['pos', 'POS'], ['kitchen', 'Kitchen'], ['barista', 'Waiter'], ['inventory', 'Inventory'], ['admin', 'Admin']];
 // Each screen is laid out as on a tablet this wide, then shrunk to fit its tile, so it looks as it does on the real device.
 const TABLET_WIDTH = 1024;
 

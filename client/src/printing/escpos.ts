@@ -9,7 +9,7 @@ export type ReceiptLine = { name?: string; qty: number; unit_price_cents?: numbe
 export type ReceiptData = {
   label: string; station?: string; created_at?: string; items?: ReceiptLine[];
   subtotal_cents?: number; discount_cents?: number; discount_label?: string | null; discount_lines?: { label: string; cents: number }[]; discount_ids?: string[]; tax_cents?: number; total_cents?: number;
-  cash_tendered_cents?: number | null; change_cents?: number | null;
+  cash_tendered_cents?: number | null; change_cents?: number | null; payment_method?: string | null;
   table_name?: string | null; guests?: number | null; staff_name?: string | null;
   offline?: boolean; reprint?: boolean; test?: boolean; heading?: string;
   // A kitchen slip for an order that changed after it was sent: "ORDER CHANGED", "CANCELLED".
@@ -109,7 +109,8 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   if (r.tax_cents) p.row('Tax', peso(r.tax_cents));
   // Double-width text fits half as many characters.
   p.bold(true).size(true, false).row('TOTAL', peso(r.total_cents), half).size(false, false).bold(false);
-  if (r.cash_tendered_cents != null) p.row('Cash', peso(r.cash_tendered_cents)).row('Change', peso(r.change_cents ?? 0));
+  if (r.payment_method === 'card') p.row('Paid by', 'CARD');
+  else if (r.cash_tendered_cents != null) p.row('Cash', peso(r.cash_tendered_cents)).row('Change', peso(r.change_cents ?? 0));
   p.rule('=').align('center');
   for (const f of settings.footer ?? []) p.line(f.length + 4 <= options.columns ? `* ${f} *` : f);
   p.raw(LF, LF, LF, LF);

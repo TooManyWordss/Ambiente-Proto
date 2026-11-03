@@ -39,7 +39,8 @@ function App(){
   },[path]);
   if(path==='/login'||path==='/login.html')return <Login role={loginRole}/>;
   if(path==='/pos')return <Pos role="pos"/>;
-  if(path==='/barista')return <Kitchen station="barista"/>;
+  // The barista login is the waiter's panel: take table orders, ask for the bill.
+  if(path==='/barista')return <Pos role="barista"/>;
   if(path==='/kitchen')return <Kitchen/>;
   if(path==='/inventory')return <Inventory/>;
   if(path==='/admin')return <Admin/>;

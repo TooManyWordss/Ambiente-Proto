@@ -5,7 +5,7 @@ import { db } from '../core/db.js';
 import { resized, tableSize } from './seed.js';
 import { attachItems, logActivity, saleTime } from '../sales/orders.js';
 import { app, notifyOwnerOverview, storeBroadcast } from '../core/http.js';
-import { tableBill } from '../../dining-domain.js';
+import { paymentMethod, tableBill } from '../../dining-domain.js';
 import { getSetting, setSetting } from '../core/settings.js';
 
 // ---------- Tables ----------
@@ -35,7 +35,7 @@ export function diningTables() {
     open.set(o.table_id, party);
   }
   return db.prepare('SELECT * FROM floor_tables WHERE active = 1 ORDER BY id').all()
-    .map((t) => ({ ...t, party: open.get(t.id) ?? null }));
+    .map(({ bill_requested_at, bill_requested_by, ...t }) => ({ ...t, party: open.has(t.id) ? { ...open.get(t.id), bill_requested_at, bill_requested_by } : null }));
 }
 
 export const announceTables = () => storeBroadcast(['pos', 'barista', 'kitchen', 'admin']).emit('tables.updated');
@@ -63,8 +63,29 @@ app.put('/api/admin/floor', (req, res) => {
   res.json(floorLayout());
 });
 
-// Cashier or barista: the party paid up and left. The table is free and its receipts get the exit time.
-app.post('/api/tables/:id/bill-out', requireRole(...SELLERS), (req, res) => {
+const clearBillRequest = (tableId) => db.prepare('UPDATE floor_tables SET bill_requested_at = NULL, bill_requested_by = NULL WHERE id = ?').run(tableId);
+
+// A waiter asks for a table's bill. The cashier's till shows the request; the cashier bills the table out
+// (the waiter can't take payment). The request clears once they pay, or when the cashier dismisses it.
+app.post('/api/tables/:id/request-bill', requireRole(...SELLERS), (req, res) => {
+  const table = db.prepare('SELECT * FROM floor_tables WHERE id = ? AND active = 1').get(Number(req.params.id));
+  if (!table) return res.status(404).json({ error: 'Table not found' });
+  if (!openTableOrders(table.id).some((o) => o.status === 'open')) return res.status(409).json({ error: `${table.name} has nothing to pay` });
+  const by = req.staff?.name ?? (req.role === 'barista' ? 'Waiter' : 'Cashier');
+  db.prepare('UPDATE floor_tables SET bill_requested_at = COALESCE(bill_requested_at, ?), bill_requested_by = COALESCE(bill_requested_by, ?) WHERE id = ?').run(new Date().toISOString(), by, table.id);
+  logActivity(req, 'table.bill_requested', `${by} asked for ${table.name}'s bill`);
+  announceTables();
+  storeBroadcast('pos').emit('bill.requested', { table_id: table.id, table_name: table.name, by });
+  res.json({ ok: true });
+});
+app.delete('/api/tables/:id/request-bill', requireRole('pos'), (req, res) => {
+  clearBillRequest(Number(req.params.id));
+  announceTables();
+  res.json({ ok: true });
+});
+
+// The cashier: the party paid up and left. The table is free and its orders get the exit time.
+app.post('/api/tables/:id/bill-out', requireRole('pos'), (req, res) => {
   const table = db.prepare('SELECT * FROM floor_tables WHERE id = ?').get(Number(req.params.id));
   if (!table) return res.status(404).json({ error: 'Table not found' });
   const open = openTableOrders(table.id);
@@ -77,6 +98,7 @@ app.post('/api/tables/:id/bill-out', requireRole(...SELLERS), (req, res) => {
   try {
     const mark = db.prepare('UPDATE orders SET billed_out_at = ? WHERE id = ?');
     for (const o of open) mark.run(now, o.id);
+    clearBillRequest(table.id);
     logActivity(req, 'table.billed_out',
       `${table.name} billed out after ${stay} min · ${open.map((o) => `#${receiptLabel(o)}`).join(', ')} · ${money(open.reduce((n, o) => n + o.total_cents, 0))}`);
     db.exec('COMMIT');
@@ -106,7 +128,7 @@ export function paidBill(billId) {
     created_at: first.paid_at, staff_name: orders.at(-1).staff_name, labels: orders.map((o) => receiptLabel(o)), order_ids: orders.map((o) => o.id),
     items: orders.flatMap((o) => o.items), subtotal_cents: sum('subtotal_cents'), discount_cents: sum('discount_cents'), tax_cents: sum('tax_cents'), total_cents: sum('total_cents'),
     discount_json: JSON.stringify(discount?.kind === 'fixed' ? { ...discount, value: sum('discount_cents') } : discount),
-    cash_tendered_cents: first.cash_tendered_cents, change_cents: first.change_cents,
+    cash_tendered_cents: first.cash_tendered_cents, change_cents: first.change_cents, payment_method: first.payment_method,
   };
 }
 
@@ -117,7 +139,7 @@ app.get('/api/bills/:billId', requireRole(...SELLERS), (req, res) => {
 
 // Bill out with payment: the table's unpaid orders are paid together, with any discount (seniors and PWDs by
 // group share) worked out on the whole bill, and the table becomes free.
-app.post('/api/tables/:id/pay', requireRole(...SELLERS), (req, res) => {
+app.post('/api/tables/:id/pay', requireRole('pos'), (req, res) => {
   const table = db.prepare('SELECT * FROM floor_tables WHERE id = ?').get(Number(req.params.id));
   if (!table) return res.status(404).json({ error: 'Table not found' });
   const { billId, cashTenderedCents, totalCents } = req.body ?? {};
@@ -132,18 +154,22 @@ app.post('/api/tables/:id/pay', requireRole(...SELLERS), (req, res) => {
   try { bill = tableBill(unpaid, discount, TAX_RATE); } catch (e) { return res.status(400).json({ error: e.message }); }
   // The cashier took cash for the bill they saw; if an order changed since, they check it again.
   if (totalCents !== undefined && totalCents !== bill.total_cents) return res.status(409).json({ error: `${table.name}'s bill changed to ${money(bill.total_cents)}. Check it with the customer again.` });
-  if (!Number.isInteger(cashTenderedCents) || cashTenderedCents < bill.total_cents) return res.status(400).json({ error: 'Cash received is less than the bill' });
+  // Paid by card: no cash received and no change.
+  const paidBy = paymentMethod(req.body?.paymentMethod);
+  if (paidBy === 'cash' && (!Number.isInteger(cashTenderedCents) || cashTenderedCents < bill.total_cents)) return res.status(400).json({ error: 'Cash received is less than the bill' });
+  const cash = paidBy === 'cash' ? cashTenderedCents : null;
   // A payment taken while the till was offline keeps the time it was taken.
-  const now = saleTime(req.body?.paidAt), change = cashTenderedCents - bill.total_cents;
+  const now = saleTime(req.body?.paidAt), change = cash === null ? null : cash - bill.total_cents;
   db.exec('BEGIN');
   try {
     const pay = db.prepare(`UPDATE orders SET status = 'paid', subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, discount_json = ?,
-      cash_tendered_cents = ?, change_cents = ?, bill_id = ?, paid_at = ?, version = version + 1 WHERE id = ? AND status = 'open'`);
-    for (const o of bill.orders) pay.run(o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents, JSON.stringify(o.discount), cashTenderedCents, change, billId, now, o.id);
+      cash_tendered_cents = ?, change_cents = ?, payment_method = ?, bill_id = ?, paid_at = ?, version = version + 1 WHERE id = ? AND status = 'open'`);
+    for (const o of bill.orders) pay.run(o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents, JSON.stringify(o.discount), cash, change, paidBy, billId, now, o.id);
     const free = db.prepare('UPDATE orders SET billed_out_at = ? WHERE id = ?');
     for (const o of open) free.run(now, o.id);
+    clearBillRequest(table.id);
     const stay = Math.round((Date.parse(now) - Date.parse(open[0].seated_at ?? open[0].created_at)) / 60000);
-    logActivity(req, 'table.paid', `${table.name} paid ${money(bill.total_cents)}${bill.discount_cents ? ` (discount ${money(bill.discount_cents)})` : ''} in cash, change ${money(change)}, and billed out after ${stay} min · ${unpaid.map((o) => `#${receiptLabel(o)}`).join(', ')}`);
+    logActivity(req, 'table.paid', `${table.name} paid ${money(bill.total_cents)}${bill.discount_cents ? ` (discount ${money(bill.discount_cents)})` : ''} ${paidBy === 'card' ? 'by card' : `in cash, change ${money(change)}`}, and billed out after ${stay} min · ${unpaid.map((o) => `#${receiptLabel(o)}`).join(', ')}`);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

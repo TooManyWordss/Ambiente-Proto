@@ -44,7 +44,8 @@ export default function BusinessUndo() {
   // The undo offer steps aside after a while so it never sits over the till's own buttons.
   useEffect(() => { if (!saved) return; const id = window.setTimeout(() => setSaved(null), 30000); return () => clearTimeout(id); }, [saved]);
   useEffect(() => { if (!message) return; const id = window.setTimeout(() => setMessage(''), 12000); return () => clearTimeout(id); }, [message]);
-  if (location.pathname.startsWith('/rairock') || location.pathname.includes('login') || !['/pos', '/barista', '/inventory', '/kitchen', '/admin'].includes(location.pathname)) return null;
+  // Not on the waiter's panel (/barista): a waiter can't take back orders; the cashier can.
+  if (location.pathname.startsWith('/rairock') || location.pathname.includes('login') || !['/pos', '/inventory', '/kitchen', '/admin'].includes(location.pathname)) return null;
   const undoSaved = async () => {
     if (!saved) return;
     setBusy(true);

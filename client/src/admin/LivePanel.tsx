@@ -7,7 +7,7 @@ import { FloorMap } from '../tables/FloorMap';
 
 // The owner's general panel: every station at once, live. Which screens are open, both tills' sales,
 // the kitchen queue item by item, the tables and the stock to buy, with one tap into any screen.
-const SCREENS: [Role, string][] = [['pos', 'POS'], ['barista', 'Barista'], ['kitchen', 'Kitchen'], ['inventory', 'Inventory'], ['admin', 'Owner']];
+const SCREENS: [Role, string][] = [['pos', 'POS'], ['barista', 'Waiter'], ['kitchen', 'Kitchen'], ['inventory', 'Inventory'], ['admin', 'Owner']];
 const itemState = (i: Line) => i.kitchen_ready_at ? 'ready' : i.kitchen_started_at ? 'cooking' : 'waiting';
 const minutesAgo = (date: string, now: number) => Math.max(0, Math.floor((now - new Date(date).getTime()) / 60000));
 const waited = (m: number) => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;

@@ -8,7 +8,7 @@ type Props = {
   request: (url: string, options: { method: string; body: unknown }) => Promise<unknown>;
 };
 const roles: PinRole[] = ['pos', 'barista', 'kitchen', 'inventory'];
-const labels: Record<PinRole, string> = { pos: 'POS', barista: 'Barista', kitchen: 'Kitchen', inventory: 'Inventory' };
+const labels: Record<PinRole, string> = { pos: 'POS', barista: 'Waiter', kitchen: 'Kitchen', inventory: 'Inventory' };
 
 export default function SharedPins({ security, refresh, notify, request }: Props) {
   const [editing, setEditing] = useState<PinRole | null>(null);

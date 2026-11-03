@@ -111,3 +111,53 @@ test('the owner resets the statistics to zero with the owner password; a copy is
     assert.equal((await sale()).data.receipt_no, first.receipt_no);
   } finally { await server.close(); }
 });
+
+test('cashiers record card or cash: counter sales, table bill-outs and Unpaid tabs, and the report splits them', async () => {
+  const server = await launch();
+  try {
+    const { request, login } = server, owner = await login('admin'), pos = await login('pos');
+    const menu = (await request('/api/menu', pos)).data.items, kebab = menu.find((m) => m.name === 'Spicy Chicken Kebab');
+    const items = [{ menuItemId: kebab.id, qty: 1 }];
+    // Counter: card needs no cash; cash still needs enough.
+    const card = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'card', items });
+    assert.equal(card.status, 201);
+    assert.deepEqual([card.data.payment_method, card.data.cash_tendered_cents, card.data.change_cents], ['card', null, null]);
+    const cash = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'cash', cashTenderedCents: 100_000, items });
+    assert.deepEqual([cash.data.payment_method, cash.data.change_cents], ['cash', 100_000 - cash.data.total_cents]);
+    assert.equal((await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'cash', cashTenderedCents: 1, items })).status, 400);
+    assert.equal((await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'bitcoin', cashTenderedCents: 100_000, items })).data.payment_method, 'cash', 'anything else counts as cash');
+
+    // A table billed out by card.
+    const table = (await request('/api/tables', pos)).data[0];
+    await request('/api/orders', pos, { clientId: crypto.randomUUID(), payLater: true, items, table: { tableId: table.id, guests: 2 } });
+    const bill = (await request(`/api/tables/${table.id}/bill`, pos)).data.orders, total = bill.reduce((n, o) => n + o.total_cents, 0);
+    const paid = await request(`/api/tables/${table.id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'card', totalCents: total });
+    assert.equal(paid.status, 200, JSON.stringify(paid.data));
+    assert.deepEqual([paid.data.payment_method, paid.data.cash_tendered_cents, paid.data.change_cents], ['card', null, null]);
+
+    // Unpaid tabs settled by card.
+    const tableId = crypto.randomUUID(), visitId = crypto.randomUUID();
+    let clock = Date.now() - 60_000;
+    const act = async (type, target, payload, who = pos) => {
+      const state = (await request('/api/dining/state', owner)).data, record = type.startsWith('table.') ? state.tables[target] : state.visits[target];
+      const op = { id: crypto.randomUUID(), deviceId: 't', at: new Date(clock += 1000).toISOString(), type, targetId: target, expectedVersion: record?.version ?? 0, payload };
+      const result = (await request('/api/dining/sync', who, { operations: [op] })).data.results[0];
+      assert.equal(result.status, 'applied', JSON.stringify(result));
+    };
+    await act('table.save', tableId, { name: 'Garden 7', active: true }, owner);
+    await act('table.seat', tableId, { visitId, guests: 2 });
+    await act('visit.submit', visitId, { submissionId: crypto.randomUUID(), lines: [{ id: crypto.randomUUID(), menu_item_id: kebab.id, name: kebab.name, unit_price_cents: kebab.price_cents, sends_to_kitchen: 1, qty: 1, note: '' }] });
+    await act('visit.event', visitId, { event: 'bill_requested_at' });
+    const { totals } = await import('../dining-domain.js');
+    const due = totals((await request('/api/dining/state', owner)).data.visits[visitId], 0.12).total_cents;
+    await act('visit.settle', visitId, { payment_method: 'card', total_cents: due });
+    const visit = (await request('/api/dining/state', owner)).data.visits[visitId];
+    assert.deepEqual([visit.payment_method, visit.cash_cents, visit.change_cents], ['card', null, null]);
+
+    const day = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const r = (await request(`/api/admin/sales-report?from=${day}&to=${day}`, owner)).data;
+    assert.deepEqual(r.orders.map((o) => o.paid_by).sort(), ['Card', 'Card', 'Card', 'Cash', 'Cash']);
+    assert.equal(r.summary.card_cents + r.summary.cash_cents, r.summary.gross_cents);
+    assert.equal(r.summary.card_cents, card.data.total_cents + total + due);
+  } finally { await server.close(); }
+});

@@ -283,4 +283,8 @@ addMissingColumns('orders', {
   seated_at: 'TEXT',        // when the party sat down
   billed_out_at: 'TEXT',    // when they paid up and left; the table is free again
 });
+addMissingColumns('floor_tables', {
+  bill_requested_at: 'TEXT', // a waiter asked the cashier to bill the party out; cleared when they pay
+  bill_requested_by: 'TEXT',
+});
 }
