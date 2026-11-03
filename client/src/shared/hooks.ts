@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { clearCachedSessions, roleFromPath } from './api';
 import { storageKey, STORE, storeUrl } from './store';
@@ -40,14 +40,18 @@ export function useSession(role: Role) {
   }, [role]);
   return { user, ready };
 }
-export function useLive(onEvent?: (event: string, data: any) => void) {
+// What the server asks a screen directly: whether it prints its own slips, or to print another station's.
+export type LiveAsks = { status?: () => object; takeover?: (data: any) => Promise<boolean> };
+export function useLive(onEvent?: (event: string, data: any) => void, asks?: LiveAsks) {
   const [state, setState] = useState<'Connecting' | 'Live' | 'Offline'>('Connecting');
+  const asked = useRef(asks); asked.current = asks;
   useEffect(() => {
     const socket: Socket = io({ withCredentials: true, auth: { store: STORE, screen: roleFromPath() } });
     socket.on('connect', () => setState('Live'));
     socket.on('disconnect', () => setState('Offline'));
     // The server asks before the till decides whether to print a paper slip: a screen that answers is really there.
-    socket.on('screen.check', (answer?: () => void) => answer?.());
+    socket.on('screen.check', (answer?: (r: object) => void) => answer?.(asked.current?.status?.() ?? {}));
+    socket.on('slips.takeover', async (data: any, answer?: (r: object) => void) => answer?.({ ok: await (asked.current?.takeover?.(data) ?? Promise.resolve(false)).catch(() => false) }));
     socket.on('connect_error', (e) => { setState('Offline'); if (e.message === 'unauthorized') { clearCachedSessions(); location.href = storeUrl(`/login?role=${roleFromPath()}`); } });
     const events = ['order.created','order.updated','ticket.updated','menu.requested','menu.updated','inventory.updated','inventory.low','security.updated','stores.updated','tables.updated','dining.updated','screens.updated','pickup.updated'];
     events.forEach((event) => socket.on(event, (data) => { if(['dining.updated','tables.updated','order.created','order.updated','ticket.updated','pickup.updated'].includes(event)) window.dispatchEvent(new Event('dining.live')); onEvent?.(event, data); }));

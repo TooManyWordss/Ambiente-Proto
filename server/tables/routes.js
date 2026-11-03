@@ -3,7 +3,7 @@ import { currentStore, TAX_RATE } from '../core/config.js';
 import { dayRange, money } from '../core/dates.js';
 import { db } from '../core/db.js';
 import { resized, tableSize } from './seed.js';
-import { attachItems, logActivity } from '../sales/orders.js';
+import { attachItems, logActivity, saleTime } from '../sales/orders.js';
 import { app, notifyOwnerOverview, storeBroadcast } from '../core/http.js';
 import { tableBill } from '../../dining-domain.js';
 
@@ -20,15 +20,17 @@ export function openTableOrders(tableId = null) {
   ).all(...(tableId ? [from, tableId] : [from]));
 }
 
+// Each party carries its unpaid orders with their items, so a till that loses its connection can still bill it out.
 export function diningTables() {
-  const open = new Map();
-  for (const o of openTableOrders()) {
-    const party = open.get(o.table_id) ?? { seated_at: o.seated_at ?? o.created_at, guests: 0, customer_tag: null, total_cents: 0, unpaid_cents: 0, receipts: [] };
+  const open = new Map(), all = openTableOrders(), unpaid = attachItems(all.filter((o) => o.status === 'open'));
+  for (const o of all) {
+    const party = open.get(o.table_id) ?? { seated_at: o.seated_at ?? o.created_at, guests: 0, customer_tag: null, total_cents: 0, unpaid_cents: 0, receipts: [], orders: [] };
     party.guests = Math.max(party.guests, o.guests ?? 0);
     party.customer_tag = party.customer_tag ?? o.customer_tag;
     party.total_cents += o.total_cents;
     if (o.status === 'open') party.unpaid_cents += o.total_cents;
     party.receipts.push({ id: o.id, label: receiptLabel(o), total_cents: o.total_cents, created_at: o.created_at, paid: o.status === 'paid' });
+    if (o.status === 'open') party.orders.push(unpaid.find((u) => u.id === o.id));
     open.set(o.table_id, party);
   }
   return db.prepare('SELECT * FROM floor_tables WHERE active = 1 ORDER BY id').all()
@@ -109,7 +111,8 @@ app.post('/api/tables/:id/pay', requireRole(...SELLERS), (req, res) => {
   // The cashier took cash for the bill they saw; if an order changed since, they check it again.
   if (totalCents !== undefined && totalCents !== bill.total_cents) return res.status(409).json({ error: `${table.name}'s bill changed to ${money(bill.total_cents)}. Check it with the customer again.` });
   if (!Number.isInteger(cashTenderedCents) || cashTenderedCents < bill.total_cents) return res.status(400).json({ error: 'Cash received is less than the bill' });
-  const now = new Date().toISOString(), change = cashTenderedCents - bill.total_cents;
+  // A payment taken while the till was offline keeps the time it was taken.
+  const now = saleTime(req.body?.paidAt), change = cashTenderedCents - bill.total_cents;
   db.exec('BEGIN');
   try {
     const pay = db.prepare(`UPDATE orders SET status = 'paid', subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, discount_json = ?,

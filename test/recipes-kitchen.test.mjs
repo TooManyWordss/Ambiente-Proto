@@ -194,7 +194,25 @@ test('sales take recipe stock out, edits and voids adjust it, and the kitchen ma
     // The owner's live panel sees which screens are open.
     assert.deepEqual((await call('/api/admin/screens', owner)).body, { pos: 0, barista: 0, kitchen: 1, inventory: 0, admin: 0 });
     assert.equal((await call('/api/admin/screens', pos)).status, 401);
+    // A kitchen tablet with its printing switched off leaves the paper slips to the till.
+    screen.off('screen.check'); screen.on('screen.check', (answer) => answer({ prints: false }));
+    assert.deepEqual((await call('/api/pos/kitchen-screens', pos)).body, { screens: 0, barista: 0 });
     screen.close();
+
+    // A station whose printer can't print hands its slips to a till, which prints them. Without a till open,
+    // the station hears so and keeps them.
+    const slip = { label: '1001', table_name: 'Table 2', created_at: new Date().toISOString(), prep: 'kitchen', items: [{ qty: 2, name: 'Latte', note: 'oat' }] };
+    assert.equal((await call('/api/kitchen/takeover', barista, 'POST', { slips: [] })).status, 400);
+    assert.equal((await call('/api/kitchen/takeover', pos, 'POST', { slips: [slip] })).status, 401);
+    assert.equal((await call('/api/kitchen/takeover', barista, 'POST', { slips: [slip] })).status, 503);
+    const till = connect(base, { extraHeaders: { cookie: pos }, auth: { store: 'ambiente' }, transports: ['websocket'] });
+    await new Promise((resolve, reject) => { till.on('connect', resolve); till.on('connect_error', reject); });
+    const handed = [];
+    till.on('slips.takeover', (data, answer) => { handed.push(data); answer({ ok: true }); });
+    assert.equal((await call('/api/kitchen/takeover', barista, 'POST', { slips: [slip] })).status, 200);
+    // It's the barista's slip, whatever the tablet says.
+    assert.deepEqual(handed[0].slips.map((s) => [s.prep, s.label, s.table_name, s.items]), [['barista', '1001', 'Table 2', [{ qty: 2, name: 'Latte', note: 'oat' }]]]);
+    till.close();
 
     // The owner's general terminal opens every screen. Each hears that screen's updates but isn't counted
     // as a real one (so with only the terminal's kitchen open, the till still prints paper kitchen slips).

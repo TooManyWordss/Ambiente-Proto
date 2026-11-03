@@ -269,3 +269,52 @@ test('default tablet flow sends a table’s order to the kitchen, then bills the
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); await server.close(); }
 });
+
+test('a table bills out while the till is offline, and the payment sends when the connection is back', { timeout: 90000 }, async () => {
+  const server = await launch(), browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
+    await context.request.post(server.base+'/api/login', {data:{role:'pos',secret:'1234'}});
+    const page = await context.newPage(), errors=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    await page.goto(server.base+'/pos');
+    await page.evaluate(()=>localStorage.setItem('5way.ambiente.autoPrint','false'));
+    const sendTo = async () => {
+      await page.locator('.menu-item').first().click();
+      await page.getByRole('button',{name:'Send to kitchen · Table 1',exact:false}).click();
+      await page.getByRole('button',{name:'Yes, send to Table 1',exact:true}).click();
+      await page.getByRole('heading',{name:'Where are the customers sitting?',exact:true}).waitFor();
+    };
+    await page.getByRole('button',{name:/^Table 1, .*free$/}).click();
+    await page.getByRole('button',{name:'Yes, Table 1',exact:true}).click();
+    await sendTo();
+    // The wifi drops. Another round goes on the table, saved on the tablet, and the table still bills out.
+    await context.setOffline(true);
+    await page.getByRole('button',{name:/^Table 1, .*occupied/}).click();
+    await page.getByRole('button',{name:'Add an order to Table 1',exact:true}).click();
+    await page.getByRole('button',{name:'Yes, Table 1',exact:true}).click();
+    await sendTo();
+    await page.getByRole('button',{name:/^Table 1, .*occupied/}).click();
+    await page.getByRole('button',{name:'Bill out',exact:true}).click();
+    await page.getByText('No connection: this is the bill saved on this tablet.',{exact:false}).waitFor();
+    assert.equal(await page.locator('.bill-orders > li').count(), 2, 'the order saved offline is on the bill');
+    await page.getByRole('button',{name:'Exact',exact:true}).click();
+    await page.getByRole('button',{name:'Pay & print receipt',exact:true}).click();
+    await page.getByRole('button',{name:/^Table 1, .*free$/}).waitFor();
+    await page.getByText(/No connection — Table 1 paid/).first().waitFor();
+    let report;
+    // Connection back: the saved order goes first, then the payment, which pays both and frees the table.
+    await context.setOffline(false);
+    for (let i=0; i<40; i++) {
+      report=await (await context.request.get(server.base+'/api/pos/today')).json();
+      if (report.orders.length===2 && report.orders.every(o=>o.status==='paid')) break;
+      await page.waitForTimeout(1000);
+    }
+    assert.deepEqual(report.orders.map(o=>[o.table_name,o.status]),[['Table 1','paid'],['Table 1','paid']]);
+    assert.equal(new Set(report.orders.map(o=>o.bill_id)).size, 1, 'paid together on one bill');
+    const tables=await (await context.request.get(server.base+'/api/tables')).json();
+    assert.equal(tables.find(t=>t.name==='Table 1').party, null);
+    await page.waitForFunction(()=>!localStorage.getItem('5way.ambiente.pending.cashier')||localStorage.getItem('5way.ambiente.pending.cashier')==='[]');
+    assert.deepEqual(errors,[]);
+  } finally { await browser.close(); await server.close(); }
+});

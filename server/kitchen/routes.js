@@ -3,7 +3,7 @@ import { currentStore } from '../core/config.js';
 import { db } from '../core/db.js';
 import { dayRange } from '../core/dates.js';
 import { attachItems, loadOrder } from '../sales/orders.js';
-import { answeringScreens, app, storeBroadcast } from '../core/http.js';
+import { answeringScreens, app, handToTill, storeBroadcast } from '../core/http.js';
 import { ticketState } from '../../dining-domain.js';
 
 // ---------- Kitchen ----------
@@ -13,6 +13,17 @@ import { ticketState } from '../../dining-domain.js';
 app.get('/api/pos/kitchen-screens', async (req, res) => {
   const open = await answeringScreens(['kitchen', 'barista']);
   res.json({ screens: open.kitchen, barista: open.barista });
+});
+
+// A station tablet whose printer is off, unpaired or out of reach sends the slips it couldn't print; a till
+// prints them instead. 503 when no till is open to take them, and the station keeps them waiting.
+app.post('/api/kitchen/takeover', requireRole('kitchen', 'barista'), async (req, res) => {
+  const slips = req.body?.slips, prep = req.role === 'barista' ? 'barista' : 'kitchen';
+  if (!Array.isArray(slips) || !slips.length || slips.length > 50 || !slips.every((s) => s && Array.isArray(s.items))) return res.status(400).json({ error: 'Send the slips to print' });
+  const clean = slips.map((s) => ({ label: String(s.label ?? '').slice(0, 40), table_name: s.table_name == null ? null : String(s.table_name).slice(0, 60), guests: Number.isInteger(s.guests) ? s.guests : null, created_at: typeof s.created_at === 'string' ? s.created_at : null, banner: typeof s.banner === 'string' ? s.banner.slice(0, 40) : undefined, late: !!s.late, prep,
+    items: s.items.slice(0, 100).map((i) => ({ qty: Number(i.qty) || 0, name: String(i.name ?? '').slice(0, 120), note: i.note ? String(i.note).slice(0, 300) : null })) }));
+  if (!(await handToTill({ slips: clean }))) return res.status(503).json({ error: 'No till is open to print them' });
+  res.json({ ok: true });
 });
 
 // ---------- Ready to collect ----------

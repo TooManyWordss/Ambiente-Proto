@@ -17,13 +17,22 @@ export const SCREEN_ROLES = ['pos', 'barista', 'kitchen', 'inventory', 'admin'];
 // tablet, so the till still prints a paper kitchen slip when no kitchen tablet is open.
 export const screenCounts = (store = currentStore()) => Object.fromEntries(SCREEN_ROLES.map((role) =>
   [role, [...(io.sockets.adapter.rooms.get(`${store}:${role}`) ?? [])].filter((id) => !io.sockets.sockets.get(id)?.data.mirror).length]));
-// The station screens that answer right now. A tablet that lost its wifi stays connected on the server for up to
-// a minute, so the till asks each screen and counts only those that reply within a couple of seconds.
+const realScreens = (store, role) => [...(io.sockets.adapter.rooms.get(`${store}:${role}`) ?? [])]
+  .map((id) => io.sockets.sockets.get(id)).filter((s) => s && !s.data.mirror);
+// The station screens that will print their own slips right now. A tablet that lost its wifi stays connected on
+// the server for up to a minute, so the till asks each screen and counts only those that reply within a couple
+// of seconds, and not one whose printing is switched off.
 export async function answeringScreens(roles, store = currentStore(), ms = 2500) {
-  const answers = await Promise.all(roles.map((role) => Promise.all([...(io.sockets.adapter.rooms.get(`${store}:${role}`) ?? [])]
-    .map((id) => io.sockets.sockets.get(id)).filter((s) => s && !s.data.mirror)
-    .map((s) => s.timeout(ms).emitWithAck('screen.check').then(() => 1, () => 0)))));
+  const answers = await Promise.all(roles.map((role) => Promise.all(realScreens(store, role)
+    .map((s) => s.timeout(ms).emitWithAck('screen.check').then((r) => r?.prints === false ? 0 : 1, () => 0)))));
   return Object.fromEntries(roles.map((role, n) => [role, answers[n].reduce((a, b) => a + b, 0)]));
+}
+// A station whose printer can't print hands its slips over: the first till that answers prints them.
+export async function handToTill(payload, store = currentStore(), ms = 8000) {
+  for (const s of realScreens(store, 'pos')) {
+    if ((await s.timeout(ms).emitWithAck('slips.takeover', payload).catch(() => null))?.ok) return true;
+  }
+  return false;
 }
 export const notifyOwnerOverview = () => { if (currentStore() === 'rairock') io.to('ambiente:admin').emit('stores.updated'); };
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { connectPrinter, encodeKitchenSlip, joinPrints, reconnectPrinter, sendToPrinter, type ReceiptData } from '../printing/escpos';
+import { api } from '../shared/api';
 import { storageKey } from '../shared/store';
 import { Dialog } from '../shared/ui';
 
@@ -16,6 +17,8 @@ function read<T extends object>(key: string, fallback: T): T { try { return { ..
 function write(key: string, value: unknown) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* not remembered on this tablet */ } }
 
 export type KitchenPrinting = ReturnType<typeof useKitchenPrinting>;
+// The till prints what this tablet's printer couldn't. False when no till is open to take them.
+const handToTill = (batch: KitchenSlip[]) => api('/api/kitchen/takeover', { method: 'POST', body: { slips: batch.map(({ key, ...slip }) => slip) }, timeoutMs: 20_000 }).then(() => true, () => false);
 
 // A ticket that shows up here well after it was placed came while this tablet or the till was offline, and the
 // till printed it on paper then. It still prints here, marked late, so the cook checks before making it twice.
@@ -24,7 +27,8 @@ const lateness = (s: KitchenSlip): KitchenSlip => !s.banner && Date.now() - Date
 
 // The kitchen or barista tablet's own receipt printer: every new ticket prints as it arrives (from the moment the
 // screen opens), and again marked "ORDER CHANGED" or "CANCELLED" when it changes. If the printer can't
-// be reached, the tickets wait and the cook sees a banner to connect it and print them.
+// be reached, a till prints them instead; only if no till can take them do they wait here, with a banner to
+// connect the printer and print them.
 export function useKitchenPrinting(slips: KitchenSlip[], active: boolean, station: 'kitchen' | 'barista' = 'kitchen') {
   const [settings, setSettings] = useState<Settings>(() => {
     const s = read(settingsKey(), DEFAULTS);
@@ -32,6 +36,7 @@ export function useKitchenPrinting(slips: KitchenSlip[], active: boolean, statio
     return s;
   });
   const [printer, setPrinter] = useState<string | null>(null), [failed, setFailed] = useState<{ slips: KitchenSlip[]; message: string } | null>(null), [busy, setBusy] = useState(false);
+  const [handed, setHanded] = useState<{ count: number; message: string } | null>(null);
   const live = useRef(settings); live.current = settings;
   const printed = useRef<Record<string, number> | null>(null), tried = useRef(new Set<string>()), queue = useRef<Promise<void>>(Promise.resolve());
   if (!printed.current) {
@@ -48,10 +53,15 @@ export function useKitchenPrinting(slips: KitchenSlip[], active: boolean, statio
       try {
         await sendToPrinter(s.method, joinPrints(...batch.map((b) => encodeKitchenSlip(b, options))));
         markPrinted([...keys]);
-        setPrinter(await reconnectPrinter(s.method));
+        setPrinter(await reconnectPrinter(s.method)); setHanded(null);
         setFailed((f) => f && (f.slips.some((x) => !keys.has(x.key)) ? { ...f, slips: f.slips.filter((x) => !keys.has(x.key)) } : null));
       } catch (e) {
-        setFailed((f) => ({ slips: [...(f?.slips ?? []).filter((x) => !keys.has(x.key)), ...batch], message: (e as Error).message }));
+        const message = (e as Error).message;
+        if (!batch[0].key.startsWith('test:') && await handToTill(batch)) {
+          markPrinted([...keys]);
+          setHanded((h) => ({ count: (h?.count ?? 0) + batch.length, message }));
+          setFailed((f) => f && (f.slips.some((x) => !keys.has(x.key)) ? { ...f, slips: f.slips.filter((x) => !keys.has(x.key)) } : null));
+        } else setFailed((f) => ({ slips: [...(f?.slips ?? []).filter((x) => !keys.has(x.key)), ...batch], message }));
       }
     });
     return queue.current;
@@ -87,21 +97,25 @@ export function useKitchenPrinting(slips: KitchenSlip[], active: boolean, statio
     finally { setBusy(false); }
   };
   const test = () => send([{ key: `test:${Date.now()}`, label: '', table_name: 'Printer test', created_at: new Date().toISOString(), prep: station, items: [{ qty: 1, name: `The ${station} printer works` }] }]).then(() => { /* a test isn't a ticket */ });
-  const skip = () => { if (failed) markPrinted(failed.slips.map((s) => s.key)); setFailed(null); };
-  return { settings, save, printer, failed, busy, connect, test, skip, wake, station };
+  const skip = () => { if (failed) markPrinted(failed.slips.map((s) => s.key)); setFailed(null); setHanded(null); };
+  // Asked by the server before the till decides on paper slips: a tablet with printing off leaves them to the till.
+  const status = () => ({ prints: live.current.on });
+  return { settings, save, printer, failed, handed, busy, connect, test, skip, wake, status, station };
 }
 
 // Shown above the tickets when printing is on but the printer needs a tap, or tickets didn't print.
 export function KitchenPrintBanner({ printing, active }: { printing: KitchenPrinting; active: boolean }) {
-  const { settings, printer, failed, busy, connect, skip, station } = printing;
+  const { settings, printer, failed, handed, busy, connect, skip, station } = printing;
   if (!settings.on || !active) return null;
   const waiting = failed?.slips.filter((s) => !s.key.startsWith('test:')).length ?? 0;
-  if (!failed && printer) return null;
+  if (!failed && !handed && printer) return null;
   return <div className="kp-banner" role="alert">
-    <span>{failed ? `${waiting ? `${waiting} ${waiting === 1 ? 'ticket' : 'tickets'} didn’t print. ` : 'The test didn’t print. '}${failed.message}` : `The ${station} printer isn’t connected, so new tickets won’t print.`}</span>
+    <span>{failed ? `${waiting ? `${waiting} ${waiting === 1 ? 'ticket' : 'tickets'} didn’t print, and no till could print ${waiting === 1 ? 'it' : 'them'} either. ` : 'The test didn’t print. '}${failed.message}`
+      : handed ? `${handed.count} ${handed.count === 1 ? 'ticket' : 'tickets'} couldn’t print here, so the till printed ${handed.count === 1 ? 'it' : 'them'}. ${handed.message}`
+      : `The ${station} printer isn’t connected, so new tickets print at the till instead.`}</span>
     <div className="kp-banner-actions">
       <button className="btn primary small" disabled={busy} onClick={() => void connect()}>{waiting ? 'Connect printer & print' : 'Connect printer'}</button>
-      {failed && <button className="btn ghost small" onClick={skip}>{waiting ? 'Don’t print them' : 'Dismiss'}</button>}
+      {(failed || handed) && <button className="btn ghost small" onClick={skip}>{waiting ? 'Don’t print them' : 'Dismiss'}</button>}
     </div>
   </div>;
 }
@@ -110,7 +124,7 @@ export function KitchenPrinterSettings({ printing, onClose }: { printing: Kitche
   const { settings, save, printer, busy, connect, test, failed, station } = printing;
   return <Dialog title={station === 'barista' ? 'Barista printer' : 'Kitchen printer'} onClose={onClose}>
     <label className="check"><input type="checkbox" checked={settings.on} onChange={(e) => save({ ...settings, on: e.target.checked })} /> Print every new order as it arrives</label>
-    <p className="hint">Each ticket prints once, with the table and what to {station === 'barista' ? 'make' : 'cook'}. A changed or cancelled order prints again, marked so. Tickets already on the screen when you switch this on don’t print.</p>
+    <p className="hint">Each ticket prints once, with the table and what to {station === 'barista' ? 'make' : 'cook'}. A changed or cancelled order prints again, marked so. Tickets already on the screen when you switch this on don’t print. If this printer can’t print (or printing is off), the till prints the tickets instead.</p>
     <label>Printer type<select value={settings.method} onChange={(e) => save({ ...settings, method: e.target.value as Settings['method'] })}>
       <option value="ble">Bluetooth (Chrome)</option>
       <option value="usb">USB cable (Chrome)</option>

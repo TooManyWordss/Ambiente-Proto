@@ -38,7 +38,7 @@ export function Kitchen({ station = 'kitchen' }: { station?: Station }) {
   const event=useCallback((name:string,o:any)=>{const put=(v:Order[])=>[...v.filter(x=>x.id!==o.id),o].sort((a,b)=>a.id-b.id);if(name==='order.created'&&open(o)){setTickets(put);if(started)chime();}if(name==='order.updated'||name==='ticket.updated'){setTickets(v=>o.status==='voided'||!open(o)?v.filter(x=>x.id!==o.id):put(v));if(name==='order.updated'&&started&&open(o))chime();}},[started,station]);
   const onTableTickets=useCallback((list:any[])=>setTableSlips(list.filter(t=>t.submission).map(t=>tableSlip(t,station))),[station]);
   const printing=useKitchenPrinting([...tickets.filter(open).map(o=>counterSlip(o,station)),...tableSlips].filter(s=>s.items?.length),printsHere,station);
-  const state=useLive(event);useEffect(()=>{void load();const id=setInterval(()=>setNow(Date.now()),30000);return()=>clearInterval(id);},[load]);
+  const state=useLive(event,{status:printing.status});useEffect(()=>{void load();const id=setInterval(()=>setNow(Date.now()),30000);return()=>clearInterval(id);},[load]);
   // Orders taken while this tablet was offline come in when it reconnects (and print then).
   useEffect(()=>{if(state==='Live')void load();},[state,load]);
   async function begin(){setStarted(true);chime();void printing.wake();try{await document.documentElement.requestFullscreen?.();}catch{}try{await navigator.wakeLock?.request('screen');}catch{}}

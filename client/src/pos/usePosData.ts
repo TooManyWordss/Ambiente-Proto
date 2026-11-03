@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../shared/api';
-import { useLive } from '../shared/hooks';
+import { useLive, type LiveAsks } from '../shared/hooks';
 import { storageKey } from '../shared/store';
 import type { DiningTable, MenuItem } from '../shared/types';
 
-export function usePosData(station: 'cashier' | 'barista') {
+export function usePosData(station: 'cashier' | 'barista', asks?: LiveAsks) {
   const [menuData, setMenuData] = useState<{ items: MenuItem[]; pending: MenuItem[]; taxRate: number; receipt: any } | null>(null);
   const [today, setToday] = useState<any>(null);
   const loadMenu = useCallback(async () => { const data = await api<any>(`/api/menu?station=${station}`); setMenuData(data); localStorage.setItem(storageKey(`menu.${station}`), JSON.stringify(data)); }, [station]);
@@ -12,7 +12,7 @@ export function usePosData(station: 'cashier' | 'barista') {
   const [tables, setTables] = useState<DiningTable[]>(() => JSON.parse(localStorage.getItem(storageKey('tables')) ?? '[]'));
   const loadTables = useCallback(async () => { const data = await api<DiningTable[]>('/api/tables'); setTables(data); localStorage.setItem(storageKey('tables'), JSON.stringify(data)); }, []);
   const onEvent = useCallback((event: string) => { if (event === 'menu.updated') void loadMenu(); if (event.startsWith('order.')) void loadToday(); if (event === 'tables.updated') void loadTables().catch(() => {}); }, [loadMenu, loadToday, loadTables]);
-  const state = useLive(onEvent);
+  const state = useLive(onEvent, asks);
   useEffect(()=>{const refresh=()=>{void loadMenu().catch(()=>{});void loadToday().catch(()=>{});};window.addEventListener('dining.business',refresh);return()=>window.removeEventListener('dining.business',refresh);},[loadMenu,loadToday]);
   useEffect(() => { void loadMenu().catch(() => { const saved = localStorage.getItem(storageKey(`menu.${station}`)); if (saved) setMenuData(JSON.parse(saved)); }); void loadToday().catch(() => {}); void loadTables().catch(() => {}); }, [loadMenu, loadToday, loadTables, station]);
   return { menuData, today, loadMenu, loadToday, tables, loadTables, state };
