@@ -43,7 +43,7 @@ const SHEETS = [
     ['Whipping Bag', 'bag'], ['Foil', 'roll'], ['Wax Paper', 'roll'], ['Gloves', 'box'], ['Cling Wrap', 'roll'], ['Microwavable', 'pck'],
     ['Cocktail Toothpick', 'pck'], ['Scotch Brite', 'pcs'], ['Axion', 'pck'], ['Take Out Box', 'pck'], ['Target', 'pcs'],
   ]],
-  ['Beef', 'portion', [['Putanesca / Mushroom', 'pcs'], ['Artisanal Meatballs', 'pcs']]],
+  ['Beef', 'portion', [['Putanesca / Mushroom', 'pcs'], ['Artisanal Meatballs', 'pcs'], ['Beef Belly Steak', 'pcs']]],
   ['Chicken', 'portion', [
     ['Chicken Kebab', 'pcs'], ['Adobo Sal', 'pcs'], ['Cheesy Fried Chicken', 'pcs'], ['BBQ / Spice Chicken', 'pcs'], ['Fried Chicken', 'pcs'],
     ['Popcorn', 'pcs'], ['Chicken Strips', 'pcs'], ['Drum Stick', 'pcs'], ['Wings', 'pcs'],
@@ -52,6 +52,7 @@ const SHEETS = [
   ['Seafood', 'portion', [
     ['Squid', 'pcs'], ['Calamari', 'pcs'], ['Camaron', 'pcs'], ['Waray', 'pcs'], ['Salmon', 'pcs'], ['Tuna Belly', 'pcs'],
     ['Roasted Shrimp', 'pcs'], ['Seafood Sotanghon', 'pcs'], ['Marinara / Seafood Pasta', 'pcs'], ['Shrimp Pasta', 'pcs'], ['Shrimp Pasta 2', 'pcs'],
+    ['Fried Shrimp', 'pcs'],
   ]],
   ['Burgers', 'portion', [['Angus Patty', 'pcs'], ['Fried Chicken Burger', 'pcs']]],
   ['Pica-pica', 'portion', [
@@ -62,8 +63,8 @@ const SHEETS = [
 ];
 
 // Only the links that are clear from the names. Anything unclear stays unlinked for the owner to link
-// on the recipe screen (Drum Stick, AS Ribeye, Demkota, Japanese Wagyu, Marinara / Seafood Pasta, the
-// two shrimp pasta rows, and most raw ingredients, whose dishes depend on the kitchen's recipes).
+// on the recipe screen (AS Ribeye, Demkota, Japanese Wagyu, Marinara / Seafood Pasta, the two shrimp pasta
+// rows, and most raw ingredients, whose dishes depend on the kitchen's recipes).
 // [stock item, amount per dish, dishes]. A portion is 1 per dish; 0 means linked, amount not entered yet.
 const DISHES = [
   ['Putanesca / Mushroom', 1, ['Beef Puttanesca', 'Beef and Mushroom']],
@@ -114,6 +115,17 @@ const DISHES = [
   ['Pistachio', 0, ['Pistachio Cake']],
   ['Cream Cheese', 0, ['Blueberry Cheesecake']],
 ];
+// The owner's answers of 2026-11-03: the burgers take Angus patties (two in the Double), the pancit a drumstick,
+// and two portions not on the sheets. The salad, cakes and drinks take nothing. Servers that loaded the sheets
+// earlier get these once, without touching links the owner made or removed since.
+const UPDATE_2026_11_03 = [
+  ['Angus Patty', 1, ['Truffle Cheese Burger']],
+  ['Angus Patty', 2, ['Double Cheese Burger']],
+  ['Beef Belly Steak', 1, ['Beef Belly Steak']],
+  ['Fried Shrimp', 1, ['Fried Shrimp Pasta']],
+  ['Drum Stick', 1, ['Spicy Fried Chicken Kare-Kare Pancit']],
+];
+const NEW_2026_11_03 = ['Beef Belly Steak', 'Fried Shrimp'];
 // What prepping a portion uses, where the portion's name says so. Amounts are entered later.
 const PREP = [
   ['Seafood Sotanghon', ['Sotanghon']],
@@ -124,10 +136,11 @@ const PREP = [
 // Every item starts at 100 in its unit, as the owner asked; the kitchen's next count sets the real figure.
 const STARTING_STOCK = 100;
 
-// Loads the sheets into Café Ambiente's inventory once. Items already in the inventory (same name) are
-// kept as they are and linked, and links the owner already made are left alone.
+// Loads the sheets into Café Ambiente's inventory once, then each later update once. Items already in the
+// inventory (same name) are kept as they are and linked, and links the owner already made are left alone.
 export function seedInventory() {
-  if (currentStore() !== 'ambiente' || getSetting('inventory_sheets_version', '') === '2026-11-01') return;
+  const version = getSetting('inventory_sheets_version', '');
+  if (currentStore() !== 'ambiente' || version >= '2026-11-03') return;
   db.exec('BEGIN IMMEDIATE');
   try {
     const now = new Date().toISOString();
@@ -141,26 +154,38 @@ export function seedInventory() {
       `INSERT INTO inventory_log (item_id, at, actor, actor_name, kind, change, quantity_after, note)
        VALUES (?, ?, 'admin', 'Paper sheets', 'added', ?, ?, 'From the kitchen inventory sheets')`
     );
-    const ids = new Map();
-    for (const [section, kind, items] of SHEETS) {
-      for (const [name, unit] of items) {
-        let id = find.get(name)?.id;
-        if (id) label.run(kind, section, id);
-        else {
-          id = Number(insert.run(name, unit, STARTING_STOCK, now, now, kind, section).lastInsertRowid);
-          log.run(id, now, STARTING_STOCK, STARTING_STOCK);
-        }
-        ids.set(name, id);
-      }
-    }
     const dish = db.prepare("SELECT id FROM menu_items WHERE name = ? AND active = 1 AND status = 'approved'");
     const link = db.prepare('INSERT OR IGNORE INTO menu_recipes (menu_item_id, inventory_item_id, qty) VALUES (?, ?, ?)');
-    for (const [item, qty, dishes] of DISHES) {
-      for (const name of dishes) { const menuItem = dish.get(name); if (menuItem) link.run(menuItem.id, ids.get(item), qty); }
-    }
-    const prep = db.prepare('INSERT OR IGNORE INTO prep_recipes (portion_id, ingredient_id, qty) VALUES (?, ?, 0)');
-    for (const [portion, ingredients] of PREP) for (const name of ingredients) prep.run(ids.get(portion), ids.get(name));
-    setSetting('inventory_sheets_version', '2026-11-01');
+    const ids = new Map();
+    // Each sheet row (or only the named ones) as a stock item: found by name, or added at the starting count.
+    const load = (only = null) => {
+      for (const [section, kind, items] of SHEETS) {
+        for (const [name, unit] of items) {
+          if (only && !only.includes(name)) continue;
+          let id = find.get(name)?.id;
+          if (id) label.run(kind, section, id);
+          else {
+            id = Number(insert.run(name, unit, STARTING_STOCK, now, now, kind, section).lastInsertRowid);
+            log.run(id, now, STARTING_STOCK, STARTING_STOCK);
+          }
+          ids.set(name, id);
+        }
+      }
+    };
+    const linkDishes = (list) => {
+      for (const [item, qty, dishes] of list) {
+        const id = ids.get(item) ?? find.get(item)?.id;
+        for (const name of dishes) { const menuItem = dish.get(name); if (menuItem && id) link.run(menuItem.id, id, qty); }
+      }
+    };
+    if (version < '2026-11-01') {
+      load();
+      linkDishes(DISHES);
+      const prep = db.prepare('INSERT OR IGNORE INTO prep_recipes (portion_id, ingredient_id, qty) VALUES (?, ?, 0)');
+      for (const [portion, ingredients] of PREP) for (const name of ingredients) prep.run(ids.get(portion), ids.get(name));
+    } else load(NEW_2026_11_03);
+    linkDishes(UPDATE_2026_11_03);
+    setSetting('inventory_sheets_version', '2026-11-03');
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

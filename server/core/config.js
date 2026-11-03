@@ -21,11 +21,11 @@ export const splitLines = (text) => text.split('|').map((l) => l.trim()).filter(
 export const RECEIPT = {
   name: process.env.RECEIPT_NAME || 'Café Ambiente',
   header: splitLines(process.env.RECEIPT_HEADER || ''),
-  footer: splitLines(process.env.RECEIPT_FOOTER || 'Thank you! Please come again.'),
+  footer: splitLines(process.env.RECEIPT_FOOTER || ''),
 };
 export const receiptForStore = (station) => currentStore() === 'rairock'
   ? { name: 'RaiRock Seafoods', header: splitLines(process.env.RAIROCK_RECEIPT_HEADER || ''),
-      footer: splitLines(process.env.RAIROCK_RECEIPT_FOOTER || 'Thank you! Please come again.'),
+      footer: splitLines(process.env.RAIROCK_RECEIPT_FOOTER || ''),
       ...(station === 'barista' ? { title: 'Barista' } : {}) }
   : station === 'barista' ? BARISTA_RECEIPT : RECEIPT;
 // The barista bar prints its own receipts: own title, numbering (B-0001…) and closing lines.

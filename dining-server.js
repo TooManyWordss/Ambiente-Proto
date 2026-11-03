@@ -39,7 +39,7 @@ export function initDiningSchema(db) {
   } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
-export function registerDining({ app, db, requireRole, currentStore, broadcast, taxRate, loadOrder, logActivity, announceStock, applyRecipes, extraMetricsVisits = () => [], receiptConfig }) {
+export function registerDining({ app, db, requireRole, currentStore, broadcast, taxRate, loadOrder, logActivity, announceStock, applyRecipes, extraMetricsVisits = () => [], receiptConfig, dishDetails = () => undefined }) {
   const onlyAmbiente = (req, res, next) => currentStore() === 'ambiente' ? next() : res.status(404).json({ error: 'Table service is available at Café Ambiente' });
   const readState = () => ({ ...Object.fromEntries(['tables', 'visits'].map(kind => [kind, Object.fromEntries(db.prepare(`SELECT id, document FROM dining_${kind}`).all().map(r => [r.id, JSON.parse(r.document)]))])), counterOrders: Object.fromEntries(db.prepare("SELECT id FROM orders WHERE visit_id IS NULL AND status IN ('paid', 'open') AND (kitchen_status IN ('new', 'preparing') OR created_at >= ?)").all(new Date(Date.now() - 2 * 86400000).toISOString()).map(r => [String(r.id), loadOrder(r.id)])) });
   const writeState = (state, before) => {
@@ -52,7 +52,9 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
       }
     }
   };
-  const menu = () => db.prepare("SELECT *, unavailable_since IS NULL AS available FROM menu_items WHERE active = 1 AND status = 'approved' ORDER BY category, name").all();
+  // Each dish with the description it shows (the owner's own, or the menu's standard one) for the menu editor.
+  const menu = () => db.prepare("SELECT *, unavailable_since IS NULL AS available FROM menu_items WHERE active = 1 AND status = 'approved' ORDER BY category, name").all()
+    .map(m => ({ ...m, description: dishDetails(m, currentStore())?.description ?? '' }));
   const changed = (before, after) => ['tables', 'visits', 'counterOrders'].flatMap(kind => [...new Set([...Object.keys(before[kind]), ...Object.keys(after[kind])])].filter(id => JSON.stringify(before[kind][id]) !== JSON.stringify(after[kind][id])).map(id => ({ kind, id, before: before[kind][id] ?? null, after: after[kind][id] ?? null })));
   const writeCounter = order => {
     db.prepare('UPDATE orders SET kitchen_status = ?, kitchen_started_at = ?, kitchen_ready_at = ?, version = ? WHERE id = ?').run(order.kitchen_status, order.kitchen_started_at, order.kitchen_ready_at, order.version, order.id);
@@ -120,7 +122,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
         if (op.type === 'visit.settle') {
           const id = receipt(req, after.visits[op.targetId], op);
           result = { receipt: loadOrder(id) };
-          if (applyRecipes) announceStockChanges = applyRecipes(req, soldIn(result.receipt, 1), `Receipt #${result.receipt.receipt_label}`);
+          if (applyRecipes) announceStockChanges = applyRecipes(req, soldIn(result.receipt, 1), `Order #${result.receipt.receipt_label}`);
         }
         writeState(after, before);
       }
@@ -170,10 +172,10 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
       if (op.type === 'visit.settle') {
         const v = state.visits[op.targetId];
         const paid = loadOrder(v.receipt_id);
-        if (!paid || paid.status !== 'paid') throw new DiningError('Receipt already changed. Review the receipt history.', 409);
+        if (!paid || paid.status !== 'paid') throw new DiningError('Order already changed. Review the order history.', 409);
         refund_cents = paid.total_cents;
         db.prepare("UPDATE orders SET status = 'voided', void_reason = 'Table settlement reversed', voided_at = ?, voided_by = ?, version = version + 1 WHERE id = ?").run(at, req.role, paid.id);
-        if (applyRecipes) announceStockChanges = applyRecipes(req, soldIn(paid, -1), `Receipt #${paid.receipt_label} settlement reversed`);
+        if (applyRecipes) announceStockChanges = applyRecipes(req, soldIn(paid, -1), `Order #${paid.receipt_label} settlement reversed`);
         v.status = 'refunded'; v.refunded_at = at; v.version++;
         for (const s of v.submissions) { s.cancelled_at = at; s.cancel_reason = 'Settlement reversed'; s.change_seq = (s.change_seq ?? 0) + 1; }
         // Keep the paid bill snapshot and receipt link for refund reconciliation.
@@ -267,9 +269,12 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     const name = text(p.name, 'menu name', 120), category = text(p.category, 'category', 80);
     const price = integer(p.price_cents, 'price', 1, 100000000);
     if (typeof p.available !== 'boolean' || typeof p.sends_to_kitchen !== 'boolean') throw new DiningError('Choose availability and kitchen routing');
+    // Sent only when the owner changed it; otherwise the dish keeps the description it has.
+    if (p.description !== undefined && (typeof p.description !== 'string' || p.description.length > 600)) throw new DiningError('Description must be up to 600 characters');
+    const description = p.description === undefined ? item.description : p.description.trim();
     if (db.prepare("SELECT id FROM menu_items WHERE id != ? AND name = ? COLLATE NOCASE AND category = ? COLLATE NOCASE AND active = 1 AND status = 'approved'").get(item.id, name, category)) throw new DiningError('This menu name and category already exist', 409);
     transaction(() => {
-      db.prepare('UPDATE menu_items SET name = ?, category = ?, price_cents = ?, sends_to_kitchen = ?, unavailable_since = ?, version = version + 1 WHERE id = ?').run(name, category, price, Number(p.sends_to_kitchen), p.available ? null : item.unavailable_since ?? new Date().toISOString(), item.id);
+      db.prepare('UPDATE menu_items SET name = ?, category = ?, price_cents = ?, sends_to_kitchen = ?, unavailable_since = ?, description = ?, version = version + 1 WHERE id = ?').run(name, category, price, Number(p.sends_to_kitchen), p.available ? null : item.unavailable_since ?? new Date().toISOString(), description, item.id);
       recordBusiness(req, 'menu', item.id, item, db.prepare('SELECT * FROM menu_items WHERE id = ?').get(item.id));
       logActivity(req, 'menu.edited', `Updated menu: ${name}`);
     });
@@ -300,7 +305,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
     const id = kind === 'event-visibility' ? 0 : match[1] ? Number(match[1]) : null;
     const priorSale = kind === 'order' && !id && req.body?.clientId ? db.prepare('SELECT id FROM orders WHERE client_id = ?').get(req.body.clientId) : null;
     const before = id !== null || priorSale ? businessSnapshot(kind, id ?? priorSale.id) : null;
-    if (kind === 'order' && before?.visit_id) return res.status(409).json({ error: 'Use the table visit history and Undo settlement for this receipt.' });
+    if (kind === 'order' && before?.visit_id) return res.status(409).json({ error: 'Use the table visit history and Undo settlement for this order.' });
     if (before && req.body?.expectedVersion !== undefined && req.body.expectedVersion !== before.version) return res.status(409).json({ error: 'This record changed. Reload it before saving.' });
     const json = res.json.bind(res);
     // The selected legacy handlers are synchronous. Their writes, version bump,
@@ -348,7 +353,7 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
       if (comparable(current) !== comparable(after)) throw new DiningError('Later changes depend on this action. Edit the current record instead.', 409);
       let cash_correction_cents = 0;
       if (row.kind === 'order') {
-        if (req.role !== 'admin' && (current.station !== (req.role === 'barista' ? 'barista' : 'cashier') || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date(current.created_at)) !== new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()))) throw new DiningError('Ask the owner to reverse a previous day or different till receipt', 403);
+        if (req.role !== 'admin' && (current.station !== (req.role === 'barista' ? 'barista' : 'cashier') || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date(current.created_at)) !== new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()))) throw new DiningError('Ask the owner to reverse a previous day or different till order', 403);
         if (!before) {
           cash_correction_cents = -current.total_cents;
           db.prepare("UPDATE orders SET status = 'voided', void_reason = 'Sale reversed', voided_at = ?, voided_by = ?, kitchen_status = 'cancelled', version = version + 1 WHERE id = ?").run(new Date().toISOString(), req.role, current.id);
@@ -362,12 +367,12 @@ export function registerDining({ app, db, requireRole, currentStore, broadcast, 
         if (applyRecipes) {
           const restored = businessSnapshot('order', current.id), delta = new Map();
           for (const [order, sign] of [[current, -1], [restored, 1]]) if (order.status === 'paid') for (const l of order.items) delta.set(l.menu_item_id, (delta.get(l.menu_item_id) ?? 0) + sign * l.qty);
-          applyRecipes(req, delta, 'Receipt undo')();
+          applyRecipes(req, delta, 'Order undo')();
         }
       } else if (row.kind === 'event-visibility') {
         db.prepare("INSERT INTO settings (key, value) VALUES ('hidden_events', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(before.hidden));
       } else {
-        const fields = row.kind === 'stock' ? ['name', 'unit', 'quantity', 'threshold', 'active'] : row.kind === 'event' ? ['name', 'start_date', 'end_date', 'kind', 'note', 'active'] : ['name', 'category', 'price_cents', 'sends_to_kitchen', 'unavailable_since', 'active', 'status', 'requested_by', 'requested_at', 'reviewed_at'];
+        const fields = row.kind === 'stock' ? ['name', 'unit', 'quantity', 'threshold', 'active'] : row.kind === 'event' ? ['name', 'start_date', 'end_date', 'kind', 'note', 'active'] : ['name', 'category', 'price_cents', 'sends_to_kitchen', 'unavailable_since', 'active', 'status', 'requested_by', 'requested_at', 'reviewed_at', 'description'];
         const restored = before ?? { ...current, active: 0, quantity: 0, status: 'rejected' };
         if (row.kind === 'menu' && restored.active && db.prepare("SELECT id FROM menu_items WHERE id != ? AND name = ? COLLATE NOCASE AND category = ? COLLATE NOCASE AND active = 1 AND status = 'approved'").get(current.id, restored.name, restored.category)) throw new DiningError('Another menu item now uses that name and category. Rename it before undoing.', 409);
         db.prepare(`UPDATE ${row.kind === 'stock' ? 'inventory_items' : row.kind === 'event' ? 'events' : 'menu_items'} SET ${fields.map(f => `${f} = ?`).join(', ')}, version = version + 1 WHERE id = ?`).run(...fields.map(f => restored[f]), current.id);

@@ -74,7 +74,7 @@ class Receipt {
 }
 
 // The customer's receipt: the café's logo, the receipt number and time, the table, then the items with
-// some air between them, the totals and a framed thank-you.
+// some air between them, the totals, and any closing lines set for the receipt (none by default).
 export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options: PrintOptions) {
   const p = new Receipt(options.columns), half = Math.floor(options.columns / 2);
   p.align('center');

@@ -7,6 +7,9 @@ import { Dialog, Toast, TopBar } from '../shared/ui';
 
 // Sections in the order of the kitchen's paper sheets; within one, items keep the sheet's row order.
 export const SECTIONS = ['Spices & market', 'Vegetables', 'Groceries', 'Supplies', 'Beef', 'Chicken', 'Steak', 'Seafood', 'Burgers', 'Pica-pica'];
+// The bought ingredients and supplies, the sheets before Beef. The owner's admin page leaves them out; the
+// inventory screen still has them for the kitchen's counts.
+export const RAW_SECTIONS = SECTIONS.slice(0, SECTIONS.indexOf('Beef'));
 export const bySheet = (items: InventoryItem[]) => {
   const groups = new Map<string, InventoryItem[]>();
   for (const i of items) { const s = i.section || 'Other'; if (!groups.has(s)) groups.set(s, []); groups.get(s)!.push(i); }

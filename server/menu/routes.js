@@ -1,4 +1,4 @@
-import { menuCatalog } from '../../menu-catalog.js';
+import { descriptionProblem, dishDetails } from './details.js';
 import { receiptForStore, TAX_RATE } from '../core/config.js';
 import { stationOf } from '../auth/sessions.js';
 import { money } from '../core/dates.js';
@@ -8,14 +8,12 @@ import { app, storeBroadcast } from '../core/http.js';
 
 // ---------- Menu ----------
 
-export const catalogDetails = new Map(menuCatalog.map(item => [`${item.category}|${item.name}`, {
-  description: item.description, descriptionNote: item.descriptionNote, descriptionSources: item.descriptionSources,
-}]));
+
 
 app.get('/api/menu', (req, res) => {
   const items = db
     .prepare(
-      `SELECT id, name, category, price_cents, sends_to_kitchen, per_grams, sizes, unavailable_since IS NULL AS available FROM menu_items
+      `SELECT id, name, category, price_cents, sends_to_kitchen, per_grams, sizes, description, unavailable_since IS NULL AS available FROM menu_items
         WHERE active = 1 AND status = 'approved' ORDER BY id`
     )
     .all();
@@ -23,7 +21,7 @@ app.get('/api/menu', (req, res) => {
   const pending = db
     .prepare("SELECT id, name, category, price_cents FROM menu_items WHERE status = 'pending' ORDER BY id")
     .all();
-  const withDetails = item => ({ ...item, ...(req.store === 'ambiente' ? catalogDetails.get(`${item.category}|${item.name}`) : undefined) });
+  const withDetails = ({ description, ...item }) => ({ ...item, ...dishDetails({ ...item, description }, req.store) });
   res.json({ taxRate: TAX_RATE, receipt: receiptForStore(stationOf(req, req.query.station)), items: items.map(withDetails), pending: pending.map(withDetails) });
 });
 
@@ -46,21 +44,22 @@ export function menuItemProblem({ name, category, priceCents }, ignoreId = 0) {
   return null;
 }
 
-// Staff propose a new item from the POS. The owner's own requests skip the queue.
+// The owner adds a dish from the admin page (straight onto the menu, with its description). Requests from
+// staff, from tills that still offer it, wait for the owner's approval.
 app.post('/api/menu/requests', (req, res) => {
-  const { name, category, priceCents, sendsToKitchen } = req.body ?? {};
-  const problem = menuItemProblem({ name, category, priceCents });
+  const { name, category, priceCents, sendsToKitchen, description } = req.body ?? {};
+  const problem = menuItemProblem({ name, category, priceCents }) ?? descriptionProblem(description);
   if (problem) return res.status(400).json({ error: problem });
   const status = req.role === 'admin' ? 'approved' : 'pending';
   const now = new Date().toISOString();
   const id = Number(
     db
       .prepare(
-        `INSERT INTO menu_items (name, category, price_cents, sends_to_kitchen, status, requested_by, requested_at, reviewed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO menu_items (name, category, price_cents, sends_to_kitchen, status, requested_by, requested_at, reviewed_at, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(name.trim(), category.trim(), priceCents, sendsToKitchen === false ? 0 : 1, status, req.role, now,
-        status === 'approved' ? now : null)
+        status === 'approved' ? now : null, description?.trim() || null)
       .lastInsertRowid
   );
   const item = db.prepare('SELECT * FROM menu_items WHERE id = ?').get(id);

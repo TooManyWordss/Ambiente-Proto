@@ -1,12 +1,16 @@
 import { builtInEvents } from '../../events.js';
 import { storeContext, STORES } from '../core/config.js';
 import { dayRange, isDate, localDate, money } from '../core/dates.js';
-import { db } from '../core/db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { DATA_DIR, db } from '../core/db.js';
+import { matchesSecret } from '../auth/secrets.js';
 import { getSetting, setSetting } from '../core/settings.js';
 import { dayReport, logActivity } from '../sales/orders.js';
 import { app, screenCounts, storeBroadcast } from '../core/http.js';
 import { menuItemProblem } from '../menu/routes.js';
 import { tableHeat } from '../tables/metrics.js';
+import { receiptLabel } from '../auth/sessions.js';
 
 // ---------- Admin: every day ----------
 
@@ -26,6 +30,102 @@ app.get('/api/admin/day', (req, res) => {
   if (!isDate(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
   const logs = db.prepare('SELECT * FROM activity_log WHERE business_date = ? ORDER BY id DESC').all(date);
   res.json({ ...dayReport(date), logs });
+});
+
+// The owner's sales report for a range of days (Asia/Manila), for the Excel download and the printed report:
+// every order with its day, hour, time, items, totals and guests, and the totals by day, by hour and by item.
+// Paid orders make the sales; unpaid table orders and voids are listed but not counted as sales.
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const clockOf = (iso) => { if (!iso) return ''; const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+app.get('/api/admin/sales-report', (req, res) => {
+  const { from, to } = req.query;
+  if (!isDate(from) || !isDate(to) || from > to) return res.status(400).json({ error: 'Choose a From and Through date' });
+  if ((Date.parse(to) - Date.parse(from)) / 86400000 > 366) return res.status(400).json({ error: 'Choose a year or less' });
+  const [start] = dayRange(from), [, end] = dayRange(to);
+  const rows = db.prepare('SELECT * FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at, id').all(start, end);
+  const items = rows.length ? db.prepare(
+    `SELECT oi.*, m.category FROM order_items oi LEFT JOIN menu_items m ON m.id = oi.menu_item_id
+      WHERE oi.order_id IN (${rows.map(() => '?').join(',')}) ORDER BY oi.id`).all(...rows.map((o) => o.id)) : [];
+  const orders = rows.map((o) => {
+    const at = new Date(o.created_at), lines = items.filter((i) => i.order_id === o.id && i.qty > 0);
+    let discount = null; try { discount = JSON.parse(o.discount_json ?? 'null'); } catch { /* none */ }
+    return {
+      order: receiptLabel(o), status: o.status, station: o.station === 'barista' ? 'Barista' : 'Cashier',
+      date: localDate(at), day: WEEKDAYS[at.getDay()], hour: `${String(at.getHours()).padStart(2, '0')}:00`, time: clockOf(o.created_at),
+      table: o.table_name ?? 'Counter', guests: o.guests ?? null, customer: o.customer_tag === 'vip' ? 'VIP' : o.customer_tag === 'repeat' ? 'Repeat' : '',
+      items: lines.map((i) => ({ name: i.name, category: i.category ?? '', qty: i.qty, unit_price_cents: i.unit_price_cents, note: i.note ?? '' })),
+      item_count: lines.reduce((n, i) => n + i.qty, 0),
+      subtotal_cents: o.subtotal_cents, discount_cents: o.discount_cents ?? 0, discount: discount?.label ?? (o.discount_cents ? 'Discount' : ''),
+      tax_cents: o.tax_cents, total_cents: o.total_cents, cash_cents: o.cash_tendered_cents, change_cents: o.change_cents,
+      paid_time: o.status === 'paid' ? clockOf(o.paid_at ?? o.created_at) : '', staff: o.staff_name ?? '',
+      edits: o.edit_count ?? 0, void_reason: o.status === 'voided' ? o.void_reason ?? '' : '',
+    };
+  });
+  const paid = orders.filter((o) => o.status === 'paid');
+  const add = (list) => ({ orders: list.length, guests: list.reduce((n, o) => n + (o.guests ?? 0), 0), items: list.reduce((n, o) => n + o.item_count, 0),
+    gross_cents: list.reduce((n, o) => n + o.total_cents, 0), net_cents: list.reduce((n, o) => n + o.subtotal_cents - o.discount_cents, 0),
+    discount_cents: list.reduce((n, o) => n + o.discount_cents, 0), tax_cents: list.reduce((n, o) => n + o.tax_cents, 0) });
+  const group = (key) => [...new Set(paid.map((o) => o[key]))].sort().map((k) => ({ [key]: k, ...add(paid.filter((o) => o[key] === k)) }));
+  const best = new Map();
+  for (const o of paid) for (const i of o.items) {
+    const b = best.get(i.name) ?? { name: i.name, category: i.category, qty: 0, revenue_cents: 0 };
+    b.qty += i.qty; b.revenue_cents += i.qty * i.unit_price_cents; best.set(i.name, b);
+  }
+  const voided = orders.filter((o) => o.status === 'voided');
+  res.json({
+    from, to, store: req.store,
+    summary: { ...add(paid), average_order_cents: paid.length ? Math.round(add(paid).gross_cents / paid.length) : 0,
+      voided: voided.length, voided_cents: voided.reduce((n, o) => n + o.total_cents, 0), unpaid: orders.filter((o) => o.status === 'open').length,
+      edited: orders.filter((o) => o.edits).length },
+    byDay: group('date').map((d) => ({ ...d, day: WEEKDAYS[new Date(`${d.date}T12:00:00`).getDay()] })), byHour: group('hour'),
+    bestSellers: [...best.values()].sort((a, b) => b.qty - a.qty || b.revenue_cents - a.revenue_cents),
+    orders,
+  });
+});
+
+// Owner, with the owner password: sets the sales statistics back to zero. Clears every order and its items,
+// table visits and their history, undo records and the activity log, so the KPI dashboard, reports and order
+// numbers start again. The menu, tables, stock, staff and settings stay. A copy of the database is saved
+// first in cafe-backups on the server, and the reset itself is logged.
+const resetFailures = new Map();
+app.post('/api/admin/reset-statistics', (req, res) => {
+  const key = `${req.store}|${req.ip}`, failure = resetFailures.get(key);
+  if (failure?.lockedUntil > Date.now()) return res.status(429).json({ error: 'Too many wrong passwords. Try again in a few minutes.' });
+  if (!matchesSecret('admin', req.body?.password)) {
+    const count = (failure?.count ?? 0) + 1;
+    resetFailures.set(key, count >= 5 ? { count: 0, lockedUntil: Date.now() + 5 * 60_000 } : { count });
+    return res.status(401).json({ error: 'Wrong owner password' });
+  }
+  resetFailures.delete(key);
+  const dir = path.join(DATA_DIR, 'cafe-backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const backup = `reset-${req.store}-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
+  db.exec(`VACUUM INTO '${path.join(dir, backup).replaceAll("'", "''")}'`);
+  const orders = db.prepare('SELECT COUNT(*) AS n FROM orders').get().n;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const table of ['order_items', 'orders', 'activity_log']) db.exec(`DELETE FROM ${table}`);
+    // Table service (Unpaid tabs): its visits and history go; the tables stay, all free.
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dining_visits'").get()) {
+      for (const table of ['dining_visits', 'dining_operations', 'business_reversals']) db.exec(`DELETE FROM ${table}`);
+      const free = db.prepare('UPDATE dining_tables SET document = ?, version = ? WHERE id = ?');
+      for (const t of db.prepare('SELECT id, document FROM dining_tables').all()) {
+        const table = JSON.parse(t.document), version = (table.version ?? 0) + 1;
+        free.run(JSON.stringify({ ...table, visit_id: null, version }), version, t.id);
+      }
+      // Tablets see a newer revision and replace their saved copy with the empty one.
+      db.prepare('UPDATE dining_meta SET revision = revision + 1 WHERE id = 1').run();
+    }
+    logActivity(req, 'statistics.reset', `Reset sales statistics to zero (${orders} orders cleared; copy saved as ${backup})`);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  storeBroadcast(['pos', 'barista', 'kitchen', 'admin']).emit('tables.updated');
+  storeBroadcast(['pos', 'barista', 'kitchen', 'admin']).emit('dining.updated');
+  storeBroadcast(['pos', 'barista', 'admin']).emit('order.paid');
+  res.json({ ok: true, cleared: orders, backup });
 });
 
 // The Ambiente owner sees both stores without merging their operational data.

@@ -6,6 +6,7 @@ import { resized, tableSize } from './seed.js';
 import { attachItems, logActivity, saleTime } from '../sales/orders.js';
 import { app, notifyOwnerOverview, storeBroadcast } from '../core/http.js';
 import { tableBill } from '../../dining-domain.js';
+import { getSetting, setSetting } from '../core/settings.js';
 
 // ---------- Tables ----------
 
@@ -40,6 +41,27 @@ export function diningTables() {
 export const announceTables = () => storeBroadcast(['pos', 'barista', 'kitchen', 'admin']).emit('tables.updated');
 
 app.get('/api/tables', requireRole(...SELLERS, 'kitchen'), (req, res) => res.json(diningTables()));
+
+// The balcony drawn on the floor map, in map units (the room runs from 14 to 1266 across, 76 to 704 down).
+// The owner can make it bigger or smaller and move it; every screen's map shows it the same.
+const BALCONY = { x: 100, y: 84, w: 166, h: 508 };
+export function floorLayout() {
+  let saved = null;
+  try { saved = JSON.parse(getSetting('floor_balcony', 'null')); } catch { /* the standard balcony */ }
+  return { balcony: saved ?? BALCONY };
+}
+app.get('/api/floor', requireRole(...SELLERS, 'kitchen'), (req, res) => res.json(floorLayout()));
+app.put('/api/admin/floor', (req, res) => {
+  const b = req.body?.balcony, whole = (n) => Number.isInteger(n);
+  if (!b || ![b.x, b.y, b.w, b.h].every(whole) || b.w < 60 || b.h < 60 || b.x < 14 || b.y < 76 || b.x + b.w > 1266 || b.y + b.h > 704) {
+    return res.status(400).json({ error: 'The balcony has to fit inside the room' });
+  }
+  const balcony = { x: b.x, y: b.y, w: b.w, h: b.h };
+  setSetting('floor_balcony', JSON.stringify(balcony));
+  logActivity(req, 'floor.balcony', `Balcony resized to ${balcony.w} × ${balcony.h}`);
+  announceTables();
+  res.json(floorLayout());
+});
 
 // Cashier or barista: the party paid up and left. The table is free and its receipts get the exit time.
 app.post('/api/tables/:id/bill-out', requireRole(...SELLERS), (req, res) => {

@@ -27,7 +27,7 @@ test('owner password login tolerates older metrics and sidebar pages work on des
     await page.getByRole('heading', { name: 'KPI dashboard', exact: true }).waitFor();
     await page.getByText('Comparison and daily trends unavailable.', { exact: false }).waitFor();
     await page.getByText('Net sales today', { exact: true }).waitFor();
-    for (const [link, target] of [['Sales & receipts', '.day-nav'], ['Trends & events', '.perf'], ['Tables & menu', '.dining-admin'], ['Inventory', '.inv-open'], ['Staff & access', '.security']]) {
+    for (const [link, target] of [['Sales & orders', '.day-nav'], ['Trends & events', '.perf'], ['Tables & menu', '.dining-admin'], ['Inventory', '.inv-open'], ['Staff & access', '.security']]) {
       await page.getByRole('navigation', { name: 'Admin pages' }).getByRole('link', { name: new RegExp(link) }).click();
       await page.locator(target).waitFor();
       assert.equal(await page.locator('.kpi-dashboard').count(), 0);
@@ -100,7 +100,7 @@ test('tablet POS survives offline reload and an interrupted payment response wit
     await page.unroute('**/api/dining/sync');
     await page.getByRole('button', { name: 'Sync now', exact: true }).click();
     await page.getByText('0 unsynced action(s)', { exact: true }).waitFor();
-    assert.match(await page.locator('.dining-bill').innerText(), /Receipt #1001/);
+    assert.match(await page.locator('.dining-bill').innerText(), /Order #1001/);
     report = await (await context.request.get(`${server.base}/api/admin/day`)).json();
     assert.equal(report.summary.order_count, 1);
     assert.equal(report.orders[0].items.reduce((n, l) => n + l.qty, 0), 3);
@@ -261,7 +261,7 @@ test('default tablet flow sends a table’s order to the kitchen, then bills the
     await page.getByRole('button',{name:/^Table 1, .*occupied/}).click();
     await page.getByRole('button',{name:'Bill out',exact:true}).click();
     await page.getByRole('button',{name:'Exact',exact:true}).click();
-    await page.getByRole('button',{name:'Pay & print receipt',exact:true}).click();
+    await page.getByRole('button',{name:'Pay & print',exact:true}).click();
     await page.getByRole('button',{name:/^Table 1, .*free$/}).waitFor();
     report=await (await context.request.get(server.base+'/api/pos/today')).json();
     assert.deepEqual(report.orders.map(o=>[o.table_name,o.status,!!o.bill_id]),[['Table 1','paid',true]]);
@@ -299,7 +299,7 @@ test('a table bills out while the till is offline, and the payment sends when th
     await page.getByText('No connection: this is the bill saved on this tablet.',{exact:false}).waitFor();
     assert.equal(await page.locator('.bill-orders > li').count(), 2, 'the order saved offline is on the bill');
     await page.getByRole('button',{name:'Exact',exact:true}).click();
-    await page.getByRole('button',{name:'Pay & print receipt',exact:true}).click();
+    await page.getByRole('button',{name:'Pay & print',exact:true}).click();
     await page.getByRole('button',{name:/^Table 1, .*free$/}).waitFor();
     await page.getByText(/No connection — Table 1 paid/).first().waitFor();
     let report;

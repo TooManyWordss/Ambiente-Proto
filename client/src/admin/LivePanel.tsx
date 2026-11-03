@@ -41,8 +41,8 @@ export function LivePanel({ tables, lowStock, liveTick, screens }: {
     </section>
     <div className="lp-grid">
       <section className="panel lp-tills"><h2>Tills today</h2>
-        <div className="lp-tiles">{[['cashier', 'Cashier'], ['barista', 'Barista']].map(([station, label]) => { const t = till(station); return <div className="lp-tile" key={station}><span>{label}</span><strong>{money(t.total)}</strong><small>{t.count} receipt{t.count === 1 ? '' : 's'}</small></div>; })}</div>
-        <h3>Latest receipts</h3>
+        <div className="lp-tiles">{[['cashier', 'Cashier'], ['barista', 'Barista']].map(([station, label]) => { const t = till(station); return <div className="lp-tile" key={station}><span>{label}</span><strong>{money(t.total)}</strong><small>{t.count} order{t.count === 1 ? '' : 's'}</small></div>; })}</div>
+        <h3>Latest orders</h3>
         <ul className="lp-list">{latest.map(o => <li key={o.id} className={o.status === 'voided' ? 'voided' : ''}><span className="lp-time">{time(o.created_at)}</span><span>#{o.receipt_label ?? o.receipt_no}{o.table_name ? ` · ${o.table_name}` : ''}{o.station === 'barista' ? ' · Barista' : ''}{o.status === 'voided' ? ' · Voided' : ''}</span><b>{money(o.total_cents)}</b></li>)}
           {!latest.length && <li className="lp-empty">No sales yet today</li>}</ul>
       </section>

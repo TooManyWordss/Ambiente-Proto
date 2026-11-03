@@ -40,8 +40,8 @@ export function CafeBusinessOverview({ refresh }: { refresh: number }) {
     {errors.length > 0 && <p role="alert">{errors.join('. ')}. Use Refresh dashboard to retry.</p>}
     <div className="business-cards">
       <article><span>Net sales today</span><strong>{sales ? money(net) : '—'}</strong><small>After discounts · excludes tax</small></article>
-      <article><span>Paid receipts</span><strong>{sales ? orders.length : '—'}</strong><small>Tables + counter + Barista</small></article>
-      <article><span>Average receipt</span><strong>{orders.length ? money(sales.summary.gross_cents / orders.length) : '—'}</strong><small>Customer bill · includes tax</small></article>
+      <article><span>Paid orders</span><strong>{sales ? orders.length : '—'}</strong><small>Tables + counter + Barista</small></article>
+      <article><span>Average order</span><strong>{orders.length ? money(sales.summary.gross_cents / orders.length) : '—'}</strong><small>Customer bill · includes tax</small></article>
       <article><span>Unpaid table bills · live</span><strong>{dining ? money(unpaid.reduce((sum, v) => sum + totals(v, dining.taxRate).total_cents, 0)) : '—'}</strong><small>{unpaid.length} open visits · not collected sales</small></article>
     </div>
     <div className="business-top-grid">

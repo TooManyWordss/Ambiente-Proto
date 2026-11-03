@@ -127,7 +127,7 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
     }
     const sold = new Map();
     for (const { menuItem, qty } of lines) sold.set(menuItem.id, (sold.get(menuItem.id) ?? 0) + qty);
-    announceStockChanges = applyRecipes(req, sold, `Receipt #${receiptLabel({ station, receipt_no: next })}`);
+    announceStockChanges = applyRecipes(req, sold, `Order #${receiptLabel({ station, receipt_no: next })}`);
     db.exec('RELEASE order_write');
   } catch (err) {
     db.exec('ROLLBACK TO order_write; RELEASE order_write');
@@ -144,14 +144,14 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
 
 // Cashiers and baristas may change or void today's receipts from their own till; the owner may change any.
 export function changeProblem(order, req) {
-  if (!order) return [404, 'Receipt not found'];
-  if (order.status === 'voided') return [409, `Receipt #${order.receipt_label} is already voided`];
+  if (!order) return [404, 'Order not found'];
+  if (order.status === 'voided') return [409, `Order #${order.receipt_label} is already voided`];
   if (req.role !== 'admin' && order.station !== stationOf(req)) {
-    return [403, `Receipt #${order.receipt_label} belongs to the ${order.station === 'barista' ? 'barista bar' : 'cashier'}. Change it there.`];
+    return [403, `Order #${order.receipt_label} belongs to the ${order.station === 'barista' ? 'barista bar' : 'cashier'}. Change it there.`];
   }
   const [from, to] = dayRange();
   if (req.role !== 'admin' && !(order.created_at >= from && order.created_at < to)) {
-    return [403, "Only today's receipts can be changed here. Ask the owner."];
+    return [403, "Only today's orders can be changed here. Ask the owner."];
   }
   return null;
 }
@@ -165,7 +165,7 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
 
   const { items } = req.body ?? {};
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'A receipt needs at least one item. Use Void to cancel the whole receipt.' });
+    return res.status(400).json({ error: 'An order needs at least one item. Use Void to cancel the whole order.' });
   }
 
   const before = new Map(); // line key -> { name, unit_price_cents, sends_to_kitchen, qty }
@@ -276,8 +276,8 @@ app.patch('/api/orders/:id', requireRole(...SELLERS), (req, res) => {
        WHERE id = ?`
     ).run(subtotal, tax, total, bill.discount_cents, JSON.stringify(discount), kitchenStatus, reopened ? 1 : 0, reopened ? 1 : 0, finished ? 1 : 0, now, now, order.id);
     logActivity(req, 'order.edited',
-      `Edited receipt #${order.receipt_label}: ${changes.join(', ')} (${money(order.total_cents)} → ${money(total)})`, order.id);
-    announceStockChanges = applyRecipes(req, sold, `Receipt #${order.receipt_label} edited`);
+      `Edited order #${order.receipt_label}: ${changes.join(', ')} (${money(order.total_cents)} → ${money(total)})`, order.id);
+    announceStockChanges = applyRecipes(req, sold, `Order #${order.receipt_label} edited`);
     db.exec('RELEASE order_write');
   } catch (err) {
     db.exec('ROLLBACK TO order_write; RELEASE order_write');
@@ -310,8 +310,8 @@ app.post('/api/orders/:id/void', requireRole(...SELLERS), (req, res) => {
     db.prepare(
       `UPDATE orders SET status = 'voided', void_reason = ?, voided_at = ?, voided_by = ?, kitchen_status = ? WHERE id = ?`
     ).run(reason, new Date().toISOString(), req.role, kitchenStatus, order.id);
-    logActivity(req, 'order.voided', `Voided receipt #${order.receipt_label} (${money(order.total_cents)}): ${reason}`, order.id);
-    announceStockChanges = applyRecipes(req, returned, `Receipt #${order.receipt_label} voided`);
+    logActivity(req, 'order.voided', `Voided order #${order.receipt_label} (${money(order.total_cents)}): ${reason}`, order.id);
+    announceStockChanges = applyRecipes(req, returned, `Order #${order.receipt_label} voided`);
     db.exec('RELEASE order_write');
   } catch (err) {
     db.exec('ROLLBACK TO order_write; RELEASE order_write');

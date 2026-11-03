@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { totals } from '../dining-domain.js';
 import { launch } from './support/server.mjs';
@@ -14,7 +18,7 @@ test('the kitchen sheets load as stock: sales take portions, prepping takes ingr
 
     // Every row of the six Café Ambiente sheets, grouped like the paper, starting at 100.
     let s = await stock();
-    assert.ok(Object.keys(s).length >= 196);
+    assert.ok(Object.keys(s).length >= 198);
     assert.deepEqual([s['Chicken Kebab'].kind, s['Chicken Kebab'].section, s['Chicken Kebab'].quantity, s['Chicken Kebab'].unit], ['portion', 'Chicken', 100, 'pcs']);
     assert.deepEqual([s.Ahos.kind, s.Ahos.section, s.Ahos.unit], ['ingredient', 'Spices & market', 'g']);
     assert.equal(s['Take Out Box'].kind, 'supply');
@@ -23,7 +27,18 @@ test('the kitchen sheets load as stock: sales take portions, prepping takes ingr
     assert.deepEqual(s['Putanesca / Mushroom'].used_in, ['Beef and Mushroom', 'Beef Puttanesca']);
     assert.ok(s.Ahos.used_in.includes('1 Cup Garlic Rice') && s.Ahos.used_in.includes('Roasted Shrimp (prep)'));
     assert.deepEqual(s['Seafood Sotanghon'].prep_uses, ['Sotanghon']);
-    for (const unlinked of ['Drum Stick', 'AS Ribeye', 'Demkota', 'Japanese Wagyu', 'Marinara / Seafood Pasta', 'Shrimp Pasta', 'Shrimp Pasta 2']) assert.deepEqual(s[unlinked].used_in, [], unlinked);
+    for (const unlinked of ['AS Ribeye', 'Demkota', 'Japanese Wagyu', 'Marinara / Seafood Pasta', 'Shrimp Pasta', 'Shrimp Pasta 2']) assert.deepEqual(s[unlinked].used_in, [], unlinked);
+    // The owner's later answers: Angus patties in the burgers (two in the Double), a drumstick in the pancit,
+    // and two portions that weren't on the sheets.
+    assert.deepEqual(s['Angus Patty'].used_in, ['Classic American Angus Cheese Burger', 'Double Cheese Burger', 'Truffle Cheese Burger']);
+    assert.deepEqual(s['Drum Stick'].used_in, ['Spicy Fried Chicken Kare-Kare Pancit']);
+    assert.deepEqual([s['Beef Belly Steak'].kind, s['Beef Belly Steak'].section, s['Beef Belly Steak'].quantity, s['Beef Belly Steak'].used_in], ['portion', 'Beef', 100, ['Beef Belly Steak']]);
+    assert.deepEqual([s['Fried Shrimp'].section, s['Fried Shrimp'].used_in], ['Seafood', ['Fried Shrimp Pasta']]);
+
+    // A Double Cheese Burger takes two patties.
+    const burger = await request('/api/orders', pos, { clientId: id(), items: [{ menuItemId: menu['Double Cheese Burger'].id, qty: 1 }], cashTenderedCents: 1_000_000 });
+    assert.equal(burger.status, 201);
+    assert.equal((await stock())['Angus Patty'].quantity, 98);
 
     // A sale takes one portion per dish. A link without an amount (spaghetti) takes nothing yet.
     const kebab = menu['Spicy Chicken Kebab'], marinara = menu['Spicy Spaghetti Marinara'];
@@ -74,3 +89,35 @@ test('the kitchen sheets load as stock: sales take portions, prepping takes ingr
     assert.equal((await stock())['Chicken Kebab'].quantity, 110);
   } finally { await server.close(); }
 });
+
+test('a server that loaded the sheets before gets the later links once, and keeps what the owner changed', async () => {
+  const copy = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ambiente-sheets-')), 'data.db');
+  // A café server as it was after the first load: no Beef Belly Steak or Fried Shrimp, no burger or pancit
+  // links, and the owner had since unlinked the kebab.
+  let server = await launch();
+  try {
+    const db = new DatabaseSync(path.join(server.dir, 'data.db'));
+    const item = (name) => db.prepare('SELECT id FROM inventory_items WHERE name = ?').get(name).id;
+    const dish = (name) => db.prepare('SELECT id FROM menu_items WHERE name = ?').get(name).id;
+    db.prepare("UPDATE settings SET value = '2026-11-01' WHERE key = 'inventory_sheets_version'").run();
+    for (const name of ['Beef Belly Steak', 'Fried Shrimp']) { const id = item(name); db.prepare('DELETE FROM menu_recipes WHERE inventory_item_id = ?').run(id); db.prepare('DELETE FROM inventory_log WHERE item_id = ?').run(id); db.prepare('DELETE FROM inventory_items WHERE id = ?').run(id); }
+    for (const [stock, menuItem] of [['Angus Patty', 'Truffle Cheese Burger'], ['Angus Patty', 'Double Cheese Burger'], ['Drum Stick', 'Spicy Fried Chicken Kare-Kare Pancit'], ['Chicken Kebab', 'Spicy Chicken Kebab']]) db.prepare('DELETE FROM menu_recipes WHERE inventory_item_id = ? AND menu_item_id = ?').run(item(stock), dish(menuItem));
+    db.exec(`VACUUM INTO '${copy}'`);
+    db.close();
+  } finally { await server.close(); }
+
+  server = await launch({ prepareData: (dir) => fs.copyFileSync(copy, path.join(dir, 'data.db')) });
+  try {
+    const owner = await server.login('admin');
+    const items = (await server.request('/api/admin/inventory', owner)).data.items, s = Object.fromEntries(items.map(i => [i.name, i]));
+    assert.equal(items.length, new Set(items.map(i => i.name)).size, 'no item added twice');
+    assert.deepEqual(s['Beef Belly Steak'].used_in, ['Beef Belly Steak']);
+    assert.deepEqual(s['Fried Shrimp'].used_in, ['Fried Shrimp Pasta']);
+    assert.deepEqual(s['Drum Stick'].used_in, ['Spicy Fried Chicken Kare-Kare Pancit']);
+    const recipes = (await server.request('/api/admin/recipes', owner)).data;
+    const menuData = (await server.request('/api/menu', await server.login('pos'))).data, menu = Object.fromEntries((menuData.items ?? menuData).map(m => [m.name, m]));
+    assert.equal(recipes.find(r => r.menu_item_id === menu['Double Cheese Burger'].id && r.name === 'Angus Patty').qty, 2);
+    assert.deepEqual(s['Chicken Kebab'].used_in, [], 'a link the owner removed stays removed');
+  } finally { await server.close(); fs.rmSync(path.dirname(copy), { recursive: true, force: true }); }
+});
+

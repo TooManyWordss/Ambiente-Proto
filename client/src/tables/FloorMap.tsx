@@ -2,6 +2,7 @@ import React, { useId, useRef, useState } from 'react';
 import { time } from '../shared/format';
 import { STORE } from '../shared/store';
 import type { DiningTable } from '../shared/types';
+import { useBalcony, type Box } from './floor';
 import { CHAIR, chairsFor, couchFor, isCouch, minutesSince, tableLabel } from './tables';
 
 // A dropped table snaps into line: its centre moves onto the nearest row (rows are 120 apart, centred at
@@ -19,7 +20,9 @@ function snapped(t: DiningTable, x: number, y: number, tables: DiningTable[]) {
 // With `heat`, each table is shaded by how much it's used (level 0 = not at all, 1–5 = least to most) instead
 // of whether it's free, and `describe` names it for screen readers and the hover note.
 export type FloorHeat = { level: Record<number, number>; describe: (t: DiningTable) => string };
-export function FloorMap({ tables, selectedId, onPick, onMove, heat, onHover }: { tables: DiningTable[]; selectedId?: number | null; onPick: (t: DiningTable) => void; onMove?: (t: DiningTable, x: number, y: number) => void; heat?: FloorHeat; onHover?: (t: DiningTable | null) => void }) {
+// `balcony` shows a size being tried out in the table editor before it's saved.
+export function FloorMap({ tables, selectedId, onPick, onMove, heat, onHover, balcony: trying }: { tables: DiningTable[]; selectedId?: number | null; onPick: (t: DiningTable) => void; onMove?: (t: DiningTable, x: number, y: number) => void; heat?: FloorHeat; onHover?: (t: DiningTable | null) => void; balcony?: Box | null }) {
+  const saved = useBalcony(tables), balcony = trying ?? saved;
   const svg = useRef<SVGSVGElement>(null), ids = useId().replace(/[^a-zA-Z0-9]/g, ''), shadow = `fm-shadow-${ids}`, floor = `fm-floor-${ids}`;
   const [drag, setDrag] = useState<{ id: number; dx: number; dy: number; x: number; y: number; moved: boolean } | null>(null);
   const point = (e: React.PointerEvent) => { const p = svg.current!.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(svg.current!.getScreenCTM()!.inverse()); };
@@ -33,7 +36,7 @@ export function FloorMap({ tables, selectedId, onPick, onMove, heat, onHover }: 
     <rect className="fm-room" x="14" y="76" width="1252" height="628" rx="18" />
     <rect x="14" y="76" width="1252" height="628" rx="18" fill={`url(#${floor})`} />
     {STORE === 'ambiente' && <g className="fm-decor" aria-hidden="true">
-      <rect className="fm-balcony" x="100" y="84" width="166" height="508" rx="14" /><text className="fm-area-label" x="183" y="105">BALCONY</text>
+      <rect className="fm-balcony" x={balcony.x} y={balcony.y} width={balcony.w} height={balcony.h} rx="14" /><text className="fm-area-label" x={balcony.x + balcony.w / 2} y={balcony.y + 21}>BALCONY</text>
       <path className="fm-cashier" d="M300 345 H500 L505 310 H670 V705 H300 Z" /><text className="fm-area-label" x="485" y="520">CASHIER</text>
       <line className="fm-entrance" x1="550" y1="78" x2="690" y2="78" /><text className="fm-area-label" x="620" y="106">ENTRANCE</text>
     </g>}

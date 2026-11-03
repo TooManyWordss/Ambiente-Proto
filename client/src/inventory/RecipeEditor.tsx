@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../shared/api';
 import { peso } from '../shared/format';
 import type { InventoryItem, MenuItem, PrepRow, Recipe } from '../shared/types';
@@ -50,3 +50,21 @@ export function PrepEditor({ stock, prep, onSaved, notify }: { stock: InventoryI
     {linked.length > 0 && <details><summary>Portions with a prep list ({linked.length})</summary><ul className="recipe-list">{linked.map(p => <li key={p.id}><button className="link" onClick={() => pick(p.id)}>{p.name}</button><span className="hint">{prep.filter(r => r.portion_id === p.id).map(r => `${r.name}: ${amount(r.qty, r.unit)}`).join(' · ')}</span></li>)}</ul></details>}
   </div>;
 }
+
+// Owner, from the menu editor: what selling one of this dish takes out of stock. The same list as "What each
+// dish uses" on the Inventory page. A dish with nothing listed (drinks, the salad, cakes) takes nothing out.
+export function DishIngredients({ menuItemId, name }: { menuItemId: number; name: string }) {
+  const [stock, setStock] = useState<InventoryItem[] | null>(null), [rows, setRows] = useState<Row[]>([]), [saving, setSaving] = useState(false), [message, setMessage] = useState('');
+  useEffect(() => {
+    Promise.all([api<{ items: InventoryItem[] }>('/api/admin/inventory'), api<Recipe[]>('/api/admin/recipes')])
+      .then(([inventory, recipes]) => { setStock(inventory.items); setRows(recipes.filter(r => r.menu_item_id === menuItemId).map(r => ({ id: r.inventory_item_id, qty: r.qty ? String(r.qty) : '' }))); })
+      .catch(e => setMessage((e as Error).message));
+  }, [menuItemId]);
+  async function save() { if (badAmount(rows)) return setMessage('Amounts must be numbers, or left blank'); setSaving(true); try { await api(`/api/admin/recipes/${menuItemId}`, { method: 'PUT', body: { ingredients: toBody(rows) } }); setMessage(rows.length ? `${name}’s ingredients saved` : `${name} takes nothing out of stock now`); } catch (e) { setMessage((e as Error).message); } finally { setSaving(false); } }
+  return <section className="dish-ingredients"><h3>Ingredients</h3><p className="hint">What selling one {name} takes out of stock. Leave an amount blank to link it now and enter it later; leave the list empty for a dish that uses nothing from stock.</p>
+    {stock ? <><Lines rows={rows} setRows={setRows} stock={stock} per={name}/>
+      <div className="sheet-actions"><button type="button" className="btn primary" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save ingredients'}</button></div></> : !message && <p className="hint">Opening the stock list…</p>}
+    {message && <p className="status" role="status">{message}</p>}
+  </section>;
+}
+

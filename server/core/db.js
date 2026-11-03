@@ -97,6 +97,7 @@ addMissingColumns('menu_items', {
   unavailable_since: 'TEXT', // set while staff have marked it unavailable (sold out); NULL = can be sold
   per_grams: 'INTEGER', // sold by weight: the price buys this many grams (see weighed.js); NULL = by the piece
   sizes: 'TEXT', // weight bands of a weighed item, e.g. "S<60,M<100,L"
+  description: 'TEXT', // the owner's own description of the dish; NULL = the menu's standard one
 });
 addMissingColumns('orders', {
   status: "TEXT NOT NULL DEFAULT 'paid'", // paid | open (a table's order, paid at bill out) | voided

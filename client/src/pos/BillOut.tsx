@@ -12,7 +12,7 @@ export type TableReceipt = Record<string, any>;
 export type OfflinePayment = { tableId: number; body: Record<string, any>; receipt: TableReceipt };
 export function billReceipt(table: DiningTable, orders: Order[], discount: any, taxRate: number): TableReceipt {
   const bill = tableBill(orders, discount, taxRate);
-  return { heading: 'BILL - NOT AN OFFICIAL RECEIPT', receipt_label: orders.filter(o => !o.offline).map(o => o.receipt_label).join(', '), station: 'cashier', table_name: table.name, guests: table.party?.guests ?? null, created_at: new Date().toISOString(), items: orders.flatMap(o => o.items.filter(i => i.qty > 0)), subtotal_cents: bill.subtotal_cents, discount_cents: bill.discount_cents, tax_cents: bill.tax_cents, total_cents: bill.total_cents, discount_json: JSON.stringify(discount) };
+  return { heading: 'BILL - NOT YET PAID', receipt_label: orders.filter(o => !o.offline).map(o => o.receipt_label).join(', '), station: 'cashier', table_name: table.name, guests: table.party?.guests ?? null, created_at: new Date().toISOString(), items: orders.flatMap(o => o.items.filter(i => i.qty > 0)), subtotal_cents: bill.subtotal_cents, discount_cents: bill.discount_cents, tax_cents: bill.tax_cents, total_cents: bill.total_cents, discount_json: JSON.stringify(discount) };
 }
 
 // Bill out: what the table ordered, any discount (seniors and PWDs by group share), the cash, and the receipt.
@@ -73,7 +73,7 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
           <div className="tender"><label htmlFor="bill-cash">Cash received</label><button className="link" onClick={() => setCash('')}>Reset</button><input id="bill-cash" inputMode="decimal" placeholder="0.00" value={cash} onChange={e => setCash(e.target.value)}/></div>
           <div className="quick-cash">{[1000, 500, 200, 100, 50, 20, 10, 5, 1].map(d => <button className="cash-btn" key={d} onClick={() => setCash(String((Number(cash) || 0) + d))}>₱{d.toLocaleString('en-PH')}</button>)}<button className="cash-btn exact" onClick={() => setCash((total / 100).toFixed(2))}>Exact</button></div>
           <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div>
-          <button className="btn primary big" disabled={paid < total || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print receipt'}</button>
+          <button className="btn primary big" disabled={paid < total || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print'}</button>
         </div>
       </>}
       {error && <p className="status error" role="alert">{error}</p>}
