@@ -85,7 +85,8 @@ app.post('/api/logout', (req, res) => {
 app.use('/api/menu', requireRole(...SELLERS));
 app.use('/api/pos', requireRole(...SELLERS));
 app.use('/api/kitchen', requireRole('kitchen', 'barista'));
-app.use('/api/inventory', requireRole(...STOCK_KEEPERS));
+// The cashier can edit stock too, always with their own staff code (see staff/codes.js).
+app.use('/api/inventory', requireRole(...STOCK_KEEPERS, 'pos'));
 app.use('/api/admin', requireRole('admin'));
 
 app.use('/api/orders', requireRole('pos', 'barista', 'kitchen'));

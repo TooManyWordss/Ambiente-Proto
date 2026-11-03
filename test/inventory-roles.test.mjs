@@ -19,7 +19,7 @@ test('the inspector counts stock and sets reorder levels; the owner adds and edi
 
     // The inspector raises the reorder level above what's left: the owner hears it's low.
     const alerted = new Promise((ok) => socket.once('inventory.low', ok));
-    assert.equal((await request(`/api/inventory/${id}`, pos, { threshold: 12 }, 'PATCH')).status, 401, 'not the till');
+    assert.equal((await request(`/api/inventory/${id}`, pos, { threshold: 12 }, 'PATCH')).status, 403, 'the till needs a cashier’s code');
     assert.equal((await request(`/api/inventory/${id}`, inspector, { threshold: -1 }, 'PATCH')).status, 400);
     const raised = await request(`/api/inventory/${id}`, inspector, { threshold: 12 }, 'PATCH');
     assert.equal(raised.status, 200);
@@ -39,5 +39,21 @@ test('the inspector counts stock and sets reorder levels; the owner adds and edi
     item = (await request('/api/admin/inventory', owner)).data.items.find((i) => i.id === id);
     assert.deepEqual([item.name, item.threshold, item.quantity], ['Oat milk (Oatside)', 4, 15]);
     assert.equal((await request(`/api/admin/inventory/${id}`, inspector, { name: 'x' }, 'PATCH')).status, 401, 'renaming is the owner’s');
+
+    // The cashier can edit stock from the till, but always with their own staff code, even before others have codes.
+    assert.equal((await request('/api/inventory', pos)).status, 200);
+    const noCodes = await request(`/api/inventory/${id}`, pos, { threshold: 5 }, 'PATCH');
+    assert.deepEqual([noCodes.status, noCodes.data.error], [403, 'You need a staff code for this. Ask the owner to give you one.']);
+    await request('/api/admin/staff', owner, { name: 'Ana', role: 'pos', code: '4821' });
+    await request('/api/admin/staff', owner, { name: 'Ben', role: 'barista', code: '5932' });
+    assert.equal((await request(`/api/inventory/${id}/stock`, pos, { kind: 'count', amount: 9, staffCode: '5932' })).status, 403, 'a waiter’s code isn’t a cashier’s');
+    assert.equal((await request('/api/staff-codes/check', pos, { staffCode: '4821' })).data.name, 'Ana');
+    assert.equal((await request(`/api/inventory/${id}/stock`, pos, { kind: 'count', amount: 9, staffCode: '4821' })).status, 200);
+    assert.equal((await request(`/api/inventory/${id}`, pos, { threshold: 5, staffCode: '4821' }, 'PATCH')).status, 200);
+    const after = (await request('/api/admin/inventory', owner)).data;
+    assert.deepEqual([after.items.find((i) => i.id === id).quantity, after.items.find((i) => i.id === id).threshold], [9, 5]);
+    assert.ok(after.log.some((l) => l.item_id === id && l.actor_name === 'Ana'), 'the change is under the cashier’s name');
+    assert.equal((await request('/api/inventory/items', pos, { name: 'Ice', unit: 'kg', quantity: 1, threshold: 0, staffCode: '4821' })).status, 403, 'adding stays the owner’s');
+    assert.equal((await request(`/api/inventory/${id}`, await login('barista'), { threshold: 1, staffCode: '5932' }, 'PATCH')).status, 401, 'not the waiter');
   } finally { socket?.close(); await server.close(); }
 });

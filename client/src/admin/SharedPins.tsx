@@ -53,8 +53,8 @@ export default function SharedPins({ security, refresh, notify, request }: Props
     {editing && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setEditing(null); }}><section className="sheet" role="dialog" aria-modal="true" aria-label={`${labels[editing]} PIN`}>
       <h2>{security?.pinSet?.[editing] ? 'Change' : 'Set'} {labels[editing]} PIN</h2>
       <form onSubmit={save}>
-        <label>New PIN<input name="pin" type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required autoFocus /></label>
-        <label>Confirm PIN<input name="confirm" type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required /></label>
+        <label>New PIN<input name="pin" type="text" className="secret" inputMode="numeric" autoComplete="off" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required autoFocus /></label>
+        <label>Confirm PIN<input name="confirm" type="text" className="secret" inputMode="numeric" autoComplete="off" pattern="[0-9]{4,12}" minLength={4} maxLength={12} required /></label>
         <p className="hint">Use 4 to 12 digits. The old PIN stops working for new sign-ins.</p>
         {error && <p className="status error" role="alert">{error}</p>}
         <div className="sheet-actions"><button type="button" className="btn ghost" onClick={() => setEditing(null)}>Cancel</button><button className="btn primary" disabled={saving}>Save PIN</button></div>

@@ -28,7 +28,7 @@ export function Table({ headers, children }: { headers: string[]; children: Reac
 export function Dialog({ title, children, onClose }: { title:string; children:React.ReactNode; onClose:()=>void }) { useEffect(()=>{const esc=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose();};window.addEventListener('keydown',esc);return()=>window.removeEventListener('keydown',esc);},[onClose]);return <div className="dialog-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section className="sheet"><h2>{title}</h2>{children}</section></div>; }
 // The person's own staff code (4–6 digits), typed with an action so it's recorded who did it.
 export function StaffCode({ value, onChange }: { value: string; onChange: (code: string) => void }) {
-  return <label className="staff-code">Your staff code<input type="password" inputMode="numeric" autoComplete="off" maxLength={6} value={value} onChange={e => onChange(e.target.value.replace(/\D/g, ''))} required/></label>;
+  return <label className="staff-code">Your staff code<input type="text" className="secret" inputMode="numeric" autoComplete="off" maxLength={6} value={value} onChange={e => onChange(e.target.value.replace(/\D/g, ''))} required/></label>;
 }
 // How the customer paid, as the cashier taps it: Cash or Card.
 export function PayBy({ value, onChange }: { value: 'cash' | 'card'; onChange: (value: 'cash' | 'card') => void }) {

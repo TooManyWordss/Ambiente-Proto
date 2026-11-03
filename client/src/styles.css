@@ -525,7 +525,6 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .kb-space{flex:6 1 0;font-size:1rem;color:var(--muted)}.kb-enter{flex:2 1 0;background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 .kb-small{flex:none;height:38px;padding:0 12px;font-size:.9rem}
 .kb-numeric .kb-bar{max-width:440px}.kb-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-width:440px;margin:0 auto}.kb-pad .kb-key{height:56px;font-size:1.5rem}.kb-pad .kb-wide{grid-column:1/-1;font-size:1.15rem}
-.kb-switch{position:fixed;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:60;padding:10px 14px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text);font:inherit;font-weight:700;box-shadow:0 4px 14px #0003}
 body.kb-open{padding-bottom:var(--kb-h)}body.kb-open .pos-shell{height:calc(100dvh - var(--kb-h))}
 body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:calc(100dvh - var(--kb-h) - 32px)}
 /* Inventory grouped like the kitchen's paper sheets. */
@@ -559,3 +558,8 @@ body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:
 .bill-request{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border:2px solid var(--accent);border-radius:12px;background:var(--surface)}
 /* Stock below its reorder level, shown at the top of every admin page until it's restocked. */
 .low-stock-alert{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0 0 14px;padding:10px 14px;border:2px solid var(--warn,#c47b12);border-radius:12px;background:color-mix(in srgb,var(--warn,#c47b12) 10%,var(--surface))}
+/* The cashier's Inventory tab: the code screen first, then the stock board signed with that code. */
+.stock-gate{max-width:420px;margin:24px auto}
+.stock-unlocked{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0 0 10px;padding:8px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+/* Passwords, PINs and staff codes: masked like a password box, but not one, so Chrome never offers to save or fill them. */
+.secret{-webkit-text-security:disc;text-security:disc}

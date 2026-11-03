@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { storageKey } from './store';
 
 // The café's own on-screen keyboard, for every text and number box on the tablets: a number pad for amounts,
-// PINs and weights, and letters for names, notes and searches. It replaces the tablet's keyboard, which
-// covers half the screen; "Tablet keyboard" switches back to that one. Computers with a real keyboard
-// don't get it unless it's switched on.
+// PINs and weights, and letters for names, notes and searches. On a tablet it's the only keyboard: the tablet's
+// own keyboard never opens (it covers half the screen and brings its own suggestions). Computers with a real
+// keyboard don't get it unless it's switched on.
 type Layout = 'letters' | 'symbols' | 'numbers' | 'decimal';
 const TEXT_TYPES = new Set(['text', 'search', 'password', 'number', 'tel', 'email', 'url', '']);
 const prefKey = () => storageKey('keyboard');
-const preference = (): 'screen' | 'system' => { try { const v = localStorage.getItem(prefKey()); if (v === 'screen' || v === 'system') return v; } catch { /* default below */ } return matchMedia('(pointer: coarse)').matches ? 'screen' : 'system'; };
+const touch = () => matchMedia('(pointer: coarse)').matches;
+const preference = (): 'screen' | 'system' => { if (touch()) return 'screen'; try { const v = localStorage.getItem(prefKey()); if (v === 'screen' || v === 'system') return v; } catch { /* default below */ } return 'system'; };
 
 const typeable = (el: Element | null): el is HTMLInputElement | HTMLTextAreaElement =>
   (el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TEXT_TYPES.has(el.type))) && !el.readOnly && !el.disabled && !el.closest('[data-no-keyboard]');
@@ -21,6 +22,8 @@ const layoutFor = (el: HTMLInputElement | HTMLTextAreaElement): Layout => {
 };
 function quiet(el: HTMLInputElement | HTMLTextAreaElement) { if (el.dataset.kbMode === undefined) el.dataset.kbMode = el.getAttribute('inputmode') ?? ''; el.setAttribute('inputmode', 'none'); }
 function restore(el: HTMLInputElement | HTMLTextAreaElement) { if (el.dataset.kbMode === undefined) return; if (el.dataset.kbMode) el.setAttribute('inputmode', el.dataset.kbMode); else el.removeAttribute('inputmode'); delete el.dataset.kbMode; }
+// No browser extras on any box: no saved-entry suggestions or autofill, spell-check underlines or autocorrect.
+function plain(el: HTMLInputElement | HTMLTextAreaElement) { if (el.getAttribute('autocomplete') !== 'off') el.setAttribute('autocomplete', 'off'); el.setAttribute('autocorrect', 'off'); el.spellcheck = false; }
 const everyBox = () => [...document.querySelectorAll('input, textarea')].filter(typeable) as (HTMLInputElement | HTMLTextAreaElement)[];
 
 // Typing goes through the box's own value setter and an input event, so React sees it like a real key.
@@ -42,12 +45,13 @@ export function ScreenKeyboard() {
   // A number box can't hold "12." while it's being typed, so the typed text is kept here.
   const numberText = useRef(new WeakMap<HTMLInputElement, string>()), board = useRef<HTMLDivElement>(null), repeat = useRef<number | undefined>(undefined);
 
-  // Keeps the tablet's keyboard away from every box, including ones that appear later.
+  // Keeps the tablet's keyboard and the browser's extras away from every box, including ones that appear later.
   useEffect(() => {
-    if (pref !== 'screen') { everyBox().forEach(restore); return; }
-    everyBox().forEach(quiet);
+    if (pref !== 'screen') everyBox().forEach(restore);
+    const mark = () => everyBox().forEach((el) => { plain(el); if (pref === 'screen') quiet(el); });
+    mark();
     let queued = 0;
-    const watch = new MutationObserver(() => { if (!queued) queued = requestAnimationFrame(() => { queued = 0; everyBox().forEach(quiet); }); });
+    const watch = new MutationObserver(() => { if (!queued) queued = requestAnimationFrame(() => { queued = 0; mark(); }); });
     watch.observe(document.body, { childList: true, subtree: true });
     return () => { watch.disconnect(); cancelAnimationFrame(queued); };
   }, [pref]);
@@ -109,7 +113,6 @@ export function ScreenKeyboard() {
     if (allowed && el.form) el.form.requestSubmit(); else if (allowed) el.blur();
   };
   const toTablet = () => { try { localStorage.setItem(prefKey(), 'system'); } catch { /* this visit only */ } const el = target; setPref('system'); if (el) { restore(el); el.blur(); window.setTimeout(() => el.focus(), 50); } };
-  const toScreen = () => { try { localStorage.setItem(prefKey(), 'screen'); } catch { /* this visit only */ } setPref('screen'); if (target) { quiet(target); target.blur(); window.setTimeout(() => target.focus(), 50); } };
 
   // Keys act on press, without taking the focus from the box. Holding ⌫ keeps deleting.
   const press = (action: () => void, hold = false) => (e: PointerEvent) => {
@@ -120,15 +123,14 @@ export function ScreenKeyboard() {
   const key = (label: string, action: () => void, className = '', aria?: string, hold = false) =>
     <button type="button" key={aria ?? label} className={`kb-key ${className}`} aria-label={aria ?? label} onPointerDown={press(action, hold)} onPointerUp={stop} onPointerLeave={stop} onClick={e => e.preventDefault()}>{label}</button>;
 
-  if (pref !== 'screen') return target?.isConnected && matchMedia('(pointer: coarse)').matches
-    ? <button type="button" className="kb-switch" onPointerDown={e => { e.preventDefault(); toScreen(); }}>⌨ Café keyboard</button> : null;
+  if (pref !== 'screen') return null;
   if (!open) return null;
   const numeric = layout === 'numbers' || layout === 'decimal';
   const label = target instanceof HTMLInputElement && target.labels?.[0]?.textContent?.trim();
   return <div ref={board} className={`screen-keyboard ${numeric ? 'kb-numeric' : ''}`} role="group" aria-label="On-screen keyboard" onPointerDown={e => e.preventDefault()}>
     <div className="kb-bar"><span className="kb-for">{label || target!.getAttribute('placeholder') || target!.getAttribute('aria-label') || ''}</span>
       {!numeric && key(layout === 'letters' ? '123' : 'ABC', () => setLayout(layout === 'letters' ? 'symbols' : 'letters'), 'kb-small', layout === 'letters' ? 'Numbers and symbols' : 'Letters')}
-      {key('Tablet keyboard', toTablet, 'kb-small', 'Use the tablet’s keyboard')}
+      {!touch() && key('Computer keyboard', toTablet, 'kb-small', 'Use the computer’s keyboard')}
       {key('Hide ⌄', () => target!.blur(), 'kb-small', 'Hide the keyboard')}</div>
     {numeric ? <div className="kb-pad">
       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => key(d, () => type(d)))}

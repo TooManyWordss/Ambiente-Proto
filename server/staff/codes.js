@@ -11,6 +11,7 @@ import { getSetting, setSetting } from '../core/settings.js';
 //   cashier (pos): every bill out (paying, freeing a table, settling on Unpaid tabs)
 //   waiter (barista): every order sent and every bill request
 //   inspector (inventory): every stock change
+//   cashier editing stock from the till: always, even before anyone else has a code
 export const CODED_ROLES = ['pos', 'barista', 'inventory'];
 export const isCode = (code) => typeof code === 'string' && /^\d{4,6}$/.test(code);
 const matches = (code, hash) => {
@@ -37,6 +38,8 @@ const RULES = [
   { method: 'POST', path: /^\/api\/tables\/\d+\/request-bill$/, role: 'barista', action: 'ask for the bill' },
   { method: 'POST', path: /^\/api\/inventory\/\d+\/stock$/, role: 'inventory', action: 'change stock' },
   { method: 'PATCH', path: /^\/api\/inventory\/\d+$/, role: 'inventory', action: 'change stock' },
+  { method: 'POST', path: /^\/api\/inventory\/\d+\/stock$/, role: 'pos', action: 'change stock', always: true },
+  { method: 'PATCH', path: /^\/api\/inventory\/\d+$/, role: 'pos', action: 'change stock', always: true },
 ];
 // Wrong codes are slowed down like PINs: 8 in a row from one address locks codes for 5 minutes.
 const failures = new Map();
@@ -54,12 +57,11 @@ export function checkCode(req, code, roles) {
 }
 // Runs before the routes: the screen's own login must also type a staff code for these actions. The owner doesn't.
 app.use((req, res, next) => {
-  const rule = RULES.find((r) => r.method === req.method && r.path.test(req.path));
-  if (!rule) return next();
   const session = readSession(req.headers.cookie);
-  if (session?.role !== rule.role || !codeRequired(rule.role)) return next();
+  const rule = RULES.find((r) => r.method === req.method && r.path.test(req.path) && r.role === session?.role);
+  if (!rule || (!rule.always && !codeRequired(rule.role))) return next();
   const { staff, error } = checkCode(req, req.body?.staffCode, [rule.role]);
-  if (!staff) return res.status(403).json({ error: error ?? `Enter your staff code to ${rule.action}`, needsCode: true });
+  if (!staff) return res.status(403).json({ error: error ?? (codeRequired(rule.role) ? `Enter your staff code to ${rule.action}` : 'You need a staff code for this. Ask the owner to give you one.'), needsCode: true });
   req.codeStaff = req.staff = staff;
   res.on('finish', () => { if (res.statusCode < 400) rememberUser(rule.role, staff, rule.action); });
   next();
@@ -69,5 +71,5 @@ app.use((req, res, next) => {
 app.get('/api/staff-codes', requireRole(...SELLERS, ...STOCK_KEEPERS), (req, res) => res.json({ required: codeRequired(req.role) }));
 app.post('/api/staff-codes/check', requireRole(...SELLERS, ...STOCK_KEEPERS), (req, res) => {
   const { staff, error } = checkCode(req, req.body?.staffCode, [req.role]);
-  return staff ? res.json({ name: staff.name }) : res.status(403).json({ error: error ?? 'Enter your staff code', needsCode: true });
+  return staff ? res.json({ name: staff.name }) : res.status(403).json({ error: codeRequired(req.role) ? error ?? 'Enter your staff code' : 'No one here has a staff code yet. Ask the owner to give you one.', needsCode: true });
 });
