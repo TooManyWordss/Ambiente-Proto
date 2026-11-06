@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { logout } from './api';
 import { STORE_NAME, storeUrl } from './store';
 import type { User } from './types';
@@ -24,7 +24,12 @@ export function TopBar({ title, subtitle, state, user, onLogout = logout, childr
 }
 export function Metric({ label, value, note }: { label: string; value: React.ReactNode; note?: string }) { return <div className="tile"><div className="label">{label}</div><div className="value">{value}</div>{note && <div className="delta">{note}</div>}</div>; }
 export function Panel({ title, children, className = '' }: { title: React.ReactNode; children: React.ReactNode; className?: string }) { return <section className={`panel ${className}`}><h2>{title}</h2>{children}</section>; }
-export function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) { return <div className="table-wrap"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{children}</tbody></table></div>; }
+// A heading sits over its column the way the column's cells do: right-aligned over numbers (cells marked "num").
+export function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {
+  const table = useRef<HTMLTableElement>(null);
+  useLayoutEffect(() => { const t = table.current, row = t?.tBodies[0]?.rows[0]; if (!t?.tHead || !row) return; [...t.tHead.rows[0].cells].forEach((th, i) => th.classList.toggle('num', !!row.cells[i]?.classList.contains('num'))); });
+  return <div className="table-wrap"><table ref={table}><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;
+}
 export function Dialog({ title, children, onClose }: { title:string; children:React.ReactNode; onClose:()=>void }) { useEffect(()=>{const esc=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose();};window.addEventListener('keydown',esc);return()=>window.removeEventListener('keydown',esc);},[onClose]);return <div className="dialog-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section className="sheet"><h2>{title}</h2>{children}</section></div>; }
 // The person's own staff code (4–6 digits), typed with an action so it's recorded who did it.
 export function StaffCode({ value, onChange }: { value: string; onChange: (code: string) => void }) {

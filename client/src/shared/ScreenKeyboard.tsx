@@ -72,13 +72,20 @@ export function ScreenKeyboard() {
   }, [pref]);
 
   const open = pref === 'screen' && !!target && target.isConnected;
-  // Room for the keyboard: the page and dialogs end above it, and the box being typed in stays in view.
+  // Room for the keyboard: the page and dialogs end above it, and the box being typed in stays in view, with the
+  // button it goes with (Pay, Save, Complete sale) brought into view too when both fit.
   useEffect(() => {
     if (!open) { document.body.classList.remove('kb-open'); return; }
     const height = board.current?.offsetHeight ?? 0;
     document.documentElement.style.setProperty('--kb-h', `${height}px`);
     document.body.classList.add('kb-open');
-    target!.scrollIntoView({ block: 'nearest' });
+    const frame = requestAnimationFrame(() => {
+      const box = target!, area = box.closest('.sheet, .pay-area, .pos-cart, form');
+      const action = [...(area?.querySelectorAll<HTMLElement>('.btn.primary') ?? [])].reverse().find((b) => b.offsetParent && (box.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+      action?.scrollIntoView({ block: 'nearest' });
+      box.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [open, layout, target]);
   useEffect(() => () => document.body.classList.remove('kb-open'), []);
 

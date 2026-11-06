@@ -78,7 +78,7 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
           {card ? <div className="change-row"><span>Card payment</span><strong>{money(total)}</strong></div> : <>
           <div className="tender"><label htmlFor="bill-cash">Cash received</label><button className="link" onClick={() => setCash('')}>Reset</button><input id="bill-cash" inputMode="decimal" placeholder="0.00" value={cash} onChange={e => setCash(e.target.value)}/></div>
           <div className="quick-cash">{[1000, 500, 200, 100, 50, 20, 10, 5, 1].map(d => <button className="cash-btn" key={d} onClick={() => setCash(String((Number(cash) || 0) + d))}>₱{d.toLocaleString('en-PH')}</button>)}<button className="cash-btn exact" onClick={() => setCash((total / 100).toFixed(2))}>Exact</button></div>
-          <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div></>}
+          <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={paid && change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div></>}
           {needCode && <StaffCode value={code} onChange={setCode}/>}
           <button className="btn primary big" disabled={!covered || !coded || saving} onClick={() => void pay()}>{saving ? 'Saving…' : 'Pay & print'}</button>
         </div>

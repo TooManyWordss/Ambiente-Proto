@@ -526,7 +526,7 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
 .kb-small{flex:none;height:38px;padding:0 12px;font-size:.9rem}
 .kb-numeric .kb-bar{max-width:440px}.kb-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-width:440px;margin:0 auto}.kb-pad .kb-key{height:56px;font-size:1.5rem}.kb-pad .kb-wide{grid-column:1/-1;font-size:1.15rem}
 body.kb-open{padding-bottom:var(--kb-h)}body.kb-open .pos-shell{height:calc(100dvh - var(--kb-h))}
-body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:calc(100dvh - var(--kb-h) - 32px)}
+body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .toast{bottom:calc(var(--kb-h) + 14px);z-index:61}body.kb-open .sheet{max-height:calc(100dvh - var(--kb-h) - 32px)}
 /* Inventory grouped like the kitchen's paper sheets. */
 .stock-section{display:grid;gap:10px}.stock-section h2{margin:8px 0 0;font:700 1.05rem var(--display);letter-spacing:.04em}.stock-section h2 small{color:var(--muted);font:600 .8rem var(--body)}
 .stock-uses{margin:0 0 12px;padding:10px 12px;border-radius:10px;background:var(--surface-2);font-size:.9rem;line-height:1.5}
@@ -553,9 +553,6 @@ body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:
 }
 /* Cash or Card, chosen by the cashier before taking payment. */
 .pay-by{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
-/* A waiter asked for a table's bill: shown on the cashier's till until it's billed out or dismissed. */
-.bill-requests{display:grid;gap:6px;margin:0 0 10px}
-.bill-request{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border:2px solid var(--accent);border-radius:12px;background:var(--surface)}
 /* Stock below its reorder level, shown at the top of every admin page until it's restocked. */
 .low-stock-alert{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0 0 14px;padding:10px 14px;border:2px solid var(--warn,#c47b12);border-radius:12px;background:color-mix(in srgb,var(--warn,#c47b12) 10%,var(--surface))}
 /* The cashier's Inventory tab: the code screen first, then the stock board signed with that code. */
@@ -563,3 +560,16 @@ body.kb-open .dialog-backdrop{bottom:var(--kb-h)}body.kb-open .sheet{max-height:
 .stock-unlocked{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0 0 10px;padding:8px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
 /* Passwords, PINs and staff codes: masked like a password box, but not one, so Chrome never offers to save or fill them. */
 .secret{-webkit-text-security:disc;text-security:disc}
+/* A waiter asked for a table's bill: a small chip in the till's top bar until it's billed out or dismissed, so the
+   floor map stays clear. Several requests sit side by side and scroll sideways if there are many. */
+.bill-chips{display:flex;gap:6px;min-width:0;flex:0 1 auto;max-width:min(38vw,460px);overflow-x:auto;scrollbar-width:none}
+.head-right:has(.bill-chips){min-width:0}
+.bill-chip{flex:none;display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border:2px solid var(--accent);border-radius:999px;background:var(--surface);font-size:.85rem;white-space:nowrap;animation:bill-chip-in .3s ease-out}
+.bill-chip .btn.small{padding:4px 10px}
+.bill-chip-open{display:inline-flex;align-items:center;gap:6px;border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}
+/* With several requests (and always on a phone) each chip is just the table's name; tapping it opens the bill. */
+.bill-chips.compact .bill-chip-more{display:none}
+@media (max-width:640px){.bill-chip-more{display:none}.bill-chips{max-width:42vw}}
+.bill-chip-x{border:0;background:none;color:var(--muted);font-size:1.1rem;line-height:1;padding:2px 6px;cursor:pointer}
+@keyframes bill-chip-in{from{transform:scale(.85);opacity:0}to{transform:none;opacity:1}}
+

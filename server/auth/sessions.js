@@ -66,7 +66,9 @@ export function readSession(cookieHeader = '') {
 
 export function sessionCookie(req, value, maxAgeSeconds) {
   const cookieName = req.store === 'rairock' ? 'session_rairock' : 'session';
-  return `${cookieName}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${req.secure ? '; Secure' : ''}`;
+  // EMBED_PREVIEW=1 lets the login work inside an editor's preview frame (local previews only).
+  const sameSite = process.env.EMBED_PREVIEW === '1' ? 'None; Secure' : `Lax${req.secure ? '; Secure' : ''}`;
+  return `${cookieName}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAgeSeconds}`;
 }
 
 export function startSession(req, res, role, staffId = 0) {
