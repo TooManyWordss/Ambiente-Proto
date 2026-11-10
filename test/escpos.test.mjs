@@ -18,6 +18,7 @@ test('a 58 mm ESC/POS receipt fits 32 columns, prints plain ASCII and ends with 
   assert.ok(out.includes('Order #1001') && !out.includes('Receipt'));
   assert.ok(out.includes('Table 5 - 2 guests'));
   assert.ok(out.includes('P370.00') && out.includes('P460.00') && out.includes('P40.00'));
+  assert.ok(out.includes('THIS DOCUMENT IS NOT VALID') && out.indexOf('FOR CLAIM OF INPUT TAX') > out.indexOf('TOTAL'), 'the BIR notice sits at the very bottom');
   assert.ok([...bytes].every((b) => b < 0x80 || b === 0xfa), 'only ASCII text');
   // Every printed line fits the paper once the printer commands are taken out.
   const lines = out.replace(/\x1b@|\x1b[aEJ][\s\S]|\x1bp[\s\S]{3}|\x1d[!B][\s\S]|\x1dV[\s\S]{2}/g, '').split('\n');

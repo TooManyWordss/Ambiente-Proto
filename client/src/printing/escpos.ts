@@ -114,6 +114,12 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   else if (r.cash_tendered_cents != null) p.row('Cash', peso(r.cash_tendered_cents)).row('Change', peso(r.change_cents ?? 0));
   p.rule('=').align('center');
   for (const f of settings.footer ?? []) p.line(f.length + 4 <= options.columns ? `* ${f} *` : f);
+  // BIR wording at the very bottom of every slip: this is not an official receipt.
+  if (!r.test) {
+    const notice = 'THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX';
+    if (notice.length <= options.columns) p.line(notice);
+    else p.line('THIS DOCUMENT IS NOT VALID').line('FOR CLAIM OF INPUT TAX');
+  }
   p.raw(LF, LF, LF, LF);
   if (options.cut) p.raw(GS, 0x56, 0x42, 0x00); // feed and cut; printers without a cutter ignore it
   if (options.drawer) p.raw(ESC, 0x70, 0x00, 0x19, 0xfa); // kick the cash drawer plugged into the printer

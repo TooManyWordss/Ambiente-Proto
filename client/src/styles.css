@@ -413,6 +413,7 @@ button,a,.fm-table,.chip,.view-tab{-webkit-tap-highlight-color:transparent;touch
   .print-receipt hr.r-double{border-top:3px double #000}
   .r-item{margin:7px 0}
   .r-each{padding-left:1.4em;font-size:9pt}
+  .r-notice{margin-top:6px;font-size:8.5pt}
   .r-tear{margin:14mm 0 6mm;text-align:center;font-size:9pt;letter-spacing:.1em}
   .r-banner{background:#000;color:#fff;font-weight:800;font-size:16pt;letter-spacing:.08em;padding:4px 0;margin-bottom:4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .r-slip-line{margin:8px 0}
