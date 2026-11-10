@@ -34,6 +34,7 @@ export function rememberUser(role, staff, action) { setSetting(`last_user_${role
 
 const RULES = [
   { method: 'POST', path: /^\/api\/tables\/\d+\/(pay|bill-out)$/, role: 'pos', action: 'bill out' },
+  { method: 'POST', path: /^\/api\/orders$/, role: 'pos', action: 'ring up an order' },
   { method: 'POST', path: /^\/api\/orders$/, role: 'barista', action: 'send an order' },
   { method: 'POST', path: /^\/api\/tables\/\d+\/request-bill$/, role: 'barista', action: 'ask for the bill' },
   { method: 'POST', path: /^\/api\/inventory\/\d+\/stock$/, role: 'inventory', action: 'change stock' },

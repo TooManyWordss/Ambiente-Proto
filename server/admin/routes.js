@@ -177,6 +177,26 @@ app.get('/api/admin/history', (req, res) => {
   );
 });
 
+// Who did what, in one feed for the owner: every order rung up (and by whom), every bill, table and
+// menu change from the activity log, and every stock movement — newest first, going back `days`.
+const STOCK_WORDS = { added: 'Added to stock', count: 'Counted', received: 'Received', used: 'Used', edited: 'Edited', sold: 'Sold', returned: 'Returned', prep: 'Prepped' };
+app.get('/api/admin/activity', (req, res) => {
+  const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 30, 1), 366);
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const entries = [];
+  for (const l of db.prepare('SELECT at, actor, actor_name, action, message FROM activity_log WHERE at >= ?').all(since))
+    entries.push({ at: l.at, who: l.actor_name ?? l.actor, action: l.action, what: l.message });
+  for (const o of db.prepare('SELECT created_at, receipt_no, station, status, total_cents, table_name, staff_name, payment_method FROM orders WHERE created_at >= ?').all(since))
+    entries.push({ at: o.created_at, who: o.staff_name ?? (o.station === 'barista' ? 'Waiter screen' : 'Cashier screen'), action: 'order',
+      what: `Order #${receiptLabel(o)} · ${money(o.total_cents)}${o.table_name ? ` · ${o.table_name}` : ''}${o.payment_method && o.payment_method !== 'cash' ? ` · by ${paymentLabel(o.payment_method)}` : ''}${o.status === 'voided' ? ' · VOIDED' : ''}` });
+  // 'sold' and 'returned' stock rows are written automatically by each sale, so they'd only repeat the orders.
+  for (const m of db.prepare("SELECT l.at, l.actor, l.actor_name, l.kind, l.change, l.quantity_after, l.note, i.name, i.unit FROM inventory_log l JOIN inventory_items i ON i.id = l.item_id WHERE l.at >= ? AND l.kind NOT IN ('sold', 'returned')").all(since))
+    entries.push({ at: m.at, who: m.actor_name ?? m.actor, action: `stock.${m.kind}`,
+      what: `${STOCK_WORDS[m.kind] ?? m.kind} ${m.name}: ${m.change > 0 ? '+' : ''}${m.change} ${m.unit} → now ${m.quantity_after} ${m.unit}${m.note ? ` · ${m.note}` : ''}` });
+  entries.sort((a, b) => b.at.localeCompare(a.at));
+  res.json({ days, entries: entries.slice(0, 2000) });
+});
+
 // The week (Monday to Sunday), month or year that contains `date`, plus the one before it.
 export function periodRange(unit, date) {
   const [y, m, d] = date.split('-').map(Number);

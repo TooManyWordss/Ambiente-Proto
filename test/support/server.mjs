@@ -9,7 +9,7 @@ export async function launch({ prepareData } = {}) {
   if (prepareData) await prepareData(dir);
   const probe = net.createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r));
   const port = probe.address().port; await new Promise(r => probe.close(r));
-  const child = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, DATA_DIR: dir, PORT: String(port), POS_PIN: '1234', BARISTA_PIN: '1234', INVENTORY_PIN: '1234', KITCHEN_PIN: '4321', ADMIN_PASSWORD: 'test-password', SESSION_SECRET: 'dining-tests', TAX_RATE: '0.12', TZ: 'Asia/Manila' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, DATA_DIR: dir, PORT: String(port), POS_PIN: '1234', BARISTA_PIN: '1234', INVENTORY_PIN: '1234', KITCHEN_PIN: '4321', ADMIN_PASSWORD: 'test-password', SESSION_SECRET: 'dining-tests', TAX_RATE: '0.12', TZ: 'Asia/Manila', SEED_STAFF: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(output)), 15000);

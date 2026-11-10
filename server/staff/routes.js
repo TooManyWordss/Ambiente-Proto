@@ -38,6 +38,23 @@ app.post('/api/admin/staff', (req, res) => {
   res.status(201).json({ id, name, role, ...makeSetupCode(id) });
 });
 
+// The owner renames someone or moves them to another position. Their code stays unless changed separately;
+// a code only ever opens what its owner's current position allows (a kitchen code opens nothing).
+app.patch('/api/admin/staff/:id', (req, res) => {
+  const staff = db.prepare('SELECT * FROM staff WHERE id = ? AND active = 1').get(Number(req.params.id));
+  if (!staff) return res.status(404).json({ error: 'Staff member not found' });
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : staff.name;
+  const role = req.body?.role ?? staff.role;
+  if (!name || name.length > 40) return res.status(400).json({ error: 'Name must be 1–40 characters' });
+  if (!['pos', 'barista', 'kitchen', 'inventory'].includes(role)) return res.status(400).json({ error: 'Choose cashier, waiter, kitchen or inventory' });
+  if (db.prepare('SELECT 1 FROM staff WHERE lower(name) = lower(?) AND active = 1 AND id != ?').get(name, staff.id)) {
+    return res.status(400).json({ error: `${name} is already on the staff list` });
+  }
+  db.prepare('UPDATE staff SET name = ?, role = ? WHERE id = ?').run(name, role, staff.id);
+  if (name !== staff.name || role !== staff.role) logActivity(req, 'staff.edited', `${staff.name} (${ROLE_LABEL[staff.role]}) → ${name} (${ROLE_LABEL[role]})`);
+  res.json({ id: staff.id, name, role });
+});
+
 app.post('/api/admin/staff/:id/code', (req, res) => {
   const staff = db.prepare('SELECT * FROM staff WHERE id = ? AND active = 1').get(Number(req.params.id));
   if (!staff) return res.status(404).json({ error: 'Staff member not found' });

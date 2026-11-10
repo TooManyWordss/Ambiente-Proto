@@ -92,5 +92,35 @@ test('staff codes: every bill out, waiter order and stock change says who did it
     assert.equal((await request('/api/dining/state', owner)).data.visits[visitId].settled_by, 'Ana');
     const history = (await request('/api/dining/history', owner)).data;
     assert.ok(!JSON.stringify(history).includes('4821'), 'the code isn’t kept in the history');
+
+    // Cashier: ringing up a counter sale needs the cashier's code too.
+    const counter = (body = {}) => request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'cash', cashTenderedCents: 100000, items, ...body });
+    const unsigned = await counter();
+    assert.deepEqual([unsigned.status, unsigned.data.needsCode], [403, true]);
+    const rung = await counter({ staffCode: '4821' });
+    assert.equal(rung.status, 201);
+    assert.equal(rung.data.staff_name, 'Ana');
+
+    // The owner's activity history names who did each order and stock change; only the owner sees it.
+    const feed = (await request('/api/admin/activity?days=7', owner)).data.entries;
+    const anas = feed.find((e) => e.action === 'order' && e.who === 'Ana');
+    assert.ok(anas && anas.what.includes('Order #'), JSON.stringify(feed.slice(0, 5)));
+    assert.ok(feed.some((e) => e.who === 'Cara' && e.action.startsWith('stock.')), 'stock changes are in the feed');
+    assert.ok(!JSON.stringify(feed).includes('4821'), 'codes never appear in the feed');
+    assert.equal((await request('/api/admin/activity', pos)).status, 401, 'owner only');
+
+    // Kitchen staff carry a code too, but it opens nothing.
+    assert.equal((await add('Kiko', 'kitchen', '7777')).status, 201);
+    assert.equal((await order(waiter, tables[3], { staffCode: '7777' })).status, 403, 'a kitchen code can’t send orders');
+    assert.equal((await counter({ staffCode: '7777' })).status, 403, 'a kitchen code can’t ring up a sale');
+
+    // The owner renames people and moves them between positions; the code follows the person.
+    const kiko = (await request('/api/admin/security', owner)).data.staff.find((s) => s.name === 'Kiko');
+    assert.equal((await request(`/api/admin/staff/${kiko.id}`, owner, { name: 'Ana' }, 'PATCH')).status, 400, 'names stay unique');
+    assert.equal((await request(`/api/admin/staff/${kiko.id}`, owner, { name: 'Koko', role: 'pos' }, 'PATCH')).status, 200);
+    const promoted = await counter({ staffCode: '7777' });
+    assert.equal(promoted.status, 201, 'the same code now rings up as a cashier');
+    assert.equal(promoted.data.staff_name, 'Koko');
+    assert.equal((await request(`/api/admin/staff/${kiko.id}`, pos, { name: 'X' }, 'PATCH')).status, 401, 'owner only');
   } finally { await server.close(); }
 });
