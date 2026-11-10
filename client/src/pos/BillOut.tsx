@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { discountLines, tableBill } from '../../../dining-domain.js';
+import { discountLines, paymentLabel, paymentReference, tableBill } from '../../../dining-domain.js';
 import DiscountEditor from '../discount-editor';
 import { api } from '../shared/api';
 import { money, rid, time } from '../shared/format';
-import type { DiningTable, Order } from '../shared/types';
-import { Dialog, PayBy, StaffCode } from '../shared/ui';
+import type { PayMethod, DiningTable, Order } from '../shared/types';
+import { Dialog, PayBy, PaymentRef, StaffCode } from '../shared/ui';
 import { useCodeRequired } from '../shared/hooks';
 
 // A table's bill as receipt data: unpaid (printed as the bill to check), or paid (the receipt).
@@ -20,7 +20,7 @@ export function billReceipt(table: DiningTable, orders: Order[], discount: any, 
 // Without a connection it bills from the copy on this tablet, and the payment sends by itself later.
 export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOffline, onFree }: { table: DiningTable; taxRate: number; onClose: () => void; onPrintBill: (r: TableReceipt) => void; onPaid: (r: TableReceipt) => void; onPaidOffline: (p: OfflinePayment) => void; onFree: (staffCode: string) => void }) {
   const [orders, setOrders] = useState<Order[] | null>(null), [error, setError] = useState(''), [discount, setDiscount] = useState<any>(null), [discountOpen, setDiscountOpen] = useState(false);
-  const [cash, setCash] = useState(''), [saving, setSaving] = useState(false), [billId] = useState(rid), [offline, setOffline] = useState(false), [payBy, setPayBy] = useState<'cash' | 'card'>(table.party?.bill_pay_by === 'card' ? 'card' : 'cash');
+  const [cash, setCash] = useState(''), [saving, setSaving] = useState(false), [billId] = useState(rid), [offline, setOffline] = useState(false), [payBy, setPayBy] = useState<PayMethod>(table.party?.bill_pay_by ?? 'cash'), [reference, setReference] = useState('');
   // Every bill out is signed with the cashier's own staff code, once the owner has given cashiers codes.
   const needCode = useCodeRequired(), [code, setCode] = useState(''), coded = !needCode || code.length >= 4;
   // Orders saved on this tablet while offline aren't on the server yet, but they're on the bill.
@@ -34,12 +34,12 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
   }, [table.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const bill = useMemo(() => { try { return orders?.length ? tableBill(orders, discount, taxRate) : null; } catch { return null; } }, [orders, discount, taxRate]);
   const lines = bill && discount ? discountLines(bill.subtotal_cents, discount, taxRate) : [];
-  const paid = Math.round((Number(cash.replace(/,/g, '')) || 0) * 100), total = bill?.total_cents ?? 0, change = paid - total, card = payBy === 'card', covered = card || paid >= total;
+  const paid = Math.round((Number(cash.replace(/,/g, '')) || 0) * 100), total = bill?.total_cents ?? 0, change = paid - total, card = payBy !== 'cash', covered = card ? !!paymentReference(reference) : paid >= total;
   async function pay() {
     if (!bill || !covered || !coded || saving) return;
     setSaving(true); setError('');
-    const body = { billId, discount, paymentMethod: payBy, cashTenderedCents: card ? null : paid, totalCents: total, paidAt: new Date().toISOString(), ...(needCode ? { staffCode: code } : {}) };
-    const later = () => onPaidOffline({ tableId: table.id, body, receipt: { ...billReceipt(table, orders!, discount, taxRate), heading: undefined, offline: true, payment_method: payBy, cash_tendered_cents: card ? null : paid, change_cents: card ? null : change } });
+    const body = { billId, discount, paymentMethod: payBy, paymentReference: card ? reference.trim() : null, cashTenderedCents: card ? null : paid, totalCents: total, paidAt: new Date().toISOString(), ...(needCode ? { staffCode: code } : {}) };
+    const later = () => onPaidOffline({ tableId: table.id, body, receipt: { ...billReceipt(table, orders!, discount, taxRate), heading: undefined, offline: true, payment_method: payBy, payment_reference: card ? reference.trim() : null, cash_tendered_cents: card ? null : paid, change_cents: card ? null : change } });
     // A bill with orders still waiting to send is paid after them, in the order they were taken.
     if (offline || saved.length) return later();
     try {
@@ -73,9 +73,9 @@ export function BillOut({ table, taxRate, onClose, onPrintBill, onPaid, onPaidOf
           <button className="btn" onClick={() => onPrintBill(billReceipt(table, orders, discount, taxRate))}>Print bill</button>
         </div>
         <div className="pay-area">
-          {table.party?.bill_pay_by && <p className="hint">The waiter says they’ll pay by {table.party.bill_pay_by}.</p>}
+          {table.party?.bill_pay_by && <p className="hint">The waiter says they’ll pay by {paymentLabel(table.party.bill_pay_by)}.</p>}
           <PayBy value={payBy} onChange={setPayBy}/>
-          {card ? <div className="change-row"><span>Card payment</span><strong>{money(total)}</strong></div> : <>
+          {card ? <><div className="change-row"><span>{paymentLabel(payBy)} payment</span><strong>{money(total)}</strong></div><PaymentRef value={reference} onChange={setReference}/></> : <>
           <div className="tender"><label htmlFor="bill-cash">Cash received</label><button className="link" onClick={() => setCash('')}>Reset</button><input id="bill-cash" inputMode="decimal" placeholder="0.00" value={cash} onChange={e => setCash(e.target.value)}/></div>
           <div className="quick-cash">{[1000, 500, 200, 100, 50, 20, 10, 5, 1].map(d => <button className="cash-btn" key={d} onClick={() => setCash(String((Number(cash) || 0) + d))}>₱{d.toLocaleString('en-PH')}</button>)}<button className="cash-btn exact" onClick={() => setCash((total / 100).toFixed(2))}>Exact</button></div>
           <div className="change-row"><span>{paid && change < 0 ? 'Still needed' : 'Change'}</span><strong className={paid && change < 0 ? 'short' : ''}>{paid ? money(Math.abs(change)) : '—'}</strong></div></>}

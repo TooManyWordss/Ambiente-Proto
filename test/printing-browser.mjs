@@ -176,3 +176,54 @@ test('the till can print the kitchen’s slips on a printer of its own, and fall
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }
 });
+
+test('the till finds its printer by itself, and links back when it drops with the Wi-Fi off', { timeout: 120000 }, async () => {
+  const server = await launch(), browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  try {
+    const till = await browser.newContext({ viewport: { width: 1024, height: 768 } });
+    await till.addInitScript(() => {
+      const state = window.__printer = { on: true, connects: 0, generation: 0, paper: [], drop() { device.gatt.connected = false; state.generation++; for (const f of listeners) f(); } }, listeners = [];
+      const channel = () => { const made = state.generation; const write = async (c) => { if (made !== state.generation) throw new Error('GATT Server is disconnected'); state.paper.push(...new Uint8Array(c.buffer ?? c)); }; return { uuid: '0000ae01-0000-1000-8000-00805f9b34fb', properties: { write: true, writeWithoutResponse: true }, writeValueWithResponse: write, writeValueWithoutResponse: write }; };
+      const gattServer = { async getPrimaryService(uuid) { if (uuid !== '0000ae30-0000-1000-8000-00805f9b34fb') throw new Error('no'); return { getCharacteristics: async () => [channel()], getCharacteristic: async () => channel() }; } };
+      const device = { id: 'A', name: 'Receipt 58', addEventListener: (_, f) => listeners.push(f), gatt: { connected: false, async connect() { state.connects++; if (!state.on) throw new Error('out of range'); this.connected = true; return gattServer; }, disconnect() { this.connected = false; } } };
+      Object.defineProperty(navigator, 'bluetooth', { value: { requestDevice: async () => device, getDevices: async () => [device] }, configurable: true });
+      window.__linked = () => device.gatt.connected;
+      const set = (k, v) => { if (!localStorage.getItem(k)) localStorage.setItem(k, v); };
+      set('5way.ambiente.printMethod', 'ble'); set('5way.blePrinter', 'Receipt 58'); set('5way.blePrinterId', 'A');
+    });
+    await till.request.post(`${server.base}/api/login`, { data: { role: 'pos', secret: '1234' } });
+    const owner = await browser.newContext();
+    await owner.request.post(`${server.base}/api/login`, { data: { role: 'admin', secret: 'test-password' } });
+    await owner.request.post(`${server.base}/api/dining/sync`, { data: { operations: [{ id: 'seed', deviceId: 't', type: 'table.save', targetId: 'tbl', expectedVersion: 0, at: new Date().toISOString(), payload: { name: 'Garden 1', active: true } }] } });
+    const pos = await till.newPage(), errors = [];
+    pos.on('pageerror', (e) => errors.push(e.message));
+    await pos.goto(`${server.base}/pos`);
+    // Nobody tapped Connect and nothing has printed yet.
+    await pos.waitForFunction(() => window.__linked(), null, { timeout: 10000 });
+
+    // The Wi-Fi goes off and the printer with it; nothing is tapped, and when the printer is back the link returns.
+    await till.setOffline(true);
+    await pos.evaluate(() => { window.__printer.on = false; window.__printer.drop(); });
+    await pos.waitForFunction(() => window.__printer.connects >= 2, null, { timeout: 10000 });
+    assert.equal(await pos.evaluate(() => window.__linked()), false);
+    await pos.evaluate(() => { window.__printer.on = true; });
+    await pos.waitForFunction(() => window.__linked(), null, { timeout: 25000 });
+
+    // A printer that only blinked comes straight back, and the next slip prints on the new link.
+    await pos.evaluate(() => window.__printer.drop());
+    await pos.waitForFunction(() => window.__linked(), null, { timeout: 8000 });
+    await till.setOffline(false);
+    const menu = await (await till.request.get(`${server.base}/api/menu`)).json(), items = menu.items ?? menu;
+    const drink = items.find((m) => /latte/i.test(m.name) && m.available);
+    await pos.getByRole('button', { name: 'Unpaid tabs', exact: true }).click();
+    await pos.getByRole('button', { name: /Garden 1.*Available/ }).click();
+    await pos.getByLabel('Guests', { exact: true }).fill('2');
+    await pos.getByRole('button', { name: 'Seat guests', exact: true }).click();
+    await pos.getByRole('heading', { name: /Garden 1/ }).waitFor();
+    await pos.getByLabel('Search table menu').fill(drink.name);
+    await pos.locator('.dining-menu button').filter({ hasText: drink.name }).first().click();
+    await pos.getByRole('button', { name: 'Send order to kitchen', exact: true }).click();
+    await pos.waitForFunction(() => String.fromCharCode(...window.__printer.paper).includes('BARISTA ORDER'), null, { timeout: 20000 });
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); await server.close(); }
+});

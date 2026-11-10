@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { connectPrinter, encodeKitchenSlip, joinPrints, reconnectPrinter, sendToPrinter, type ReceiptData } from '../printing/escpos';
+import { connectPrinter, encodeKitchenSlip, joinPrints, keepPrintersLinked, printerWaitingText, reconnectPrinter, sendToPrinter, type ReceiptData } from '../printing/escpos';
 import { api } from '../shared/api';
 import { storageKey } from '../shared/store';
 import { Dialog } from '../shared/ui';
@@ -88,7 +88,8 @@ export function useKitchenPrinting(slips: KitchenSlip[], active: boolean, statio
     live.current = next; setSettings(next); write(settingsKey(), next);
     if (lookAgain) void wake();
   };
-  useEffect(() => { void wake(); }, [wake]);
+  // Keeps the printer linked with no tap: after a reload, a dropped link, or the Wi-Fi going off.
+  useEffect(() => keepPrintersLinked(() => live.current.on ? [[live.current.method, 'receipt']] : [], (_, name) => setPrinter(name)), []);
   // Must run from a tap: the browser asks which printer to use.
   const connect = async () => {
     setBusy(true);
@@ -130,7 +131,7 @@ export function KitchenPrinterSettings({ printing, onClose }: { printing: Kitche
       <option value="usb">USB cable (Chrome)</option>
     </select></label>
     <p className="hint">{settings.method === 'ble' ? 'Prints straight from Chrome over Bluetooth, no app needed. Tap Connect and pick the printer. After a reload it reconnects by itself where Chrome allows; otherwise a banner asks you to connect.' : 'Plug the printer into the tablet with a USB OTG cable, tap Connect and choose it. Chrome remembers the printer.'} Needs the HTTPS address.</p>
-    <div className="sheet-actions"><span className="hint">{printer ?? 'Not connected'}</span><button className="btn" disabled={busy} onClick={() => void connect()}>Connect</button></div>
+    <div className="sheet-actions"><span className="hint">{printer ?? printerWaitingText(settings.method)}</span><button className="btn" disabled={busy} onClick={() => void connect()}>Connect</button></div>
     <label>Paper width<select value={settings.paper} onChange={(e) => save({ ...settings, paper: e.target.value as Settings['paper'] })}><option value="58">58 mm (32 characters)</option><option value="80">80 mm (48 characters)</option></select></label>
     <label className="check"><input type="checkbox" checked={settings.cut} onChange={(e) => save({ ...settings, cut: e.target.checked })} /> Cut the paper after each ticket (printers with a cutter)</label>
     {failed && <p className="status error" role="status">Last print failed: {failed.message}</p>}

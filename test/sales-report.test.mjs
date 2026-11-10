@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import test from 'node:test';
 import zlib from 'node:zlib';
+import { totals } from '../dining-domain.js';
 import { workbook } from '../client/src/shared/xlsx.ts';
 import { launch } from './support/server.mjs';
 
@@ -119,7 +120,7 @@ test('cashiers record card or cash: counter sales, table bill-outs and Unpaid ta
     const menu = (await request('/api/menu', pos)).data.items, kebab = menu.find((m) => m.name === 'Spicy Chicken Kebab');
     const items = [{ menuItemId: kebab.id, qty: 1 }];
     // Counter: card needs no cash; cash still needs enough.
-    const card = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'card', items });
+    const card = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'card', paymentReference: 'AUTH-1001', items });
     assert.equal(card.status, 201);
     assert.deepEqual([card.data.payment_method, card.data.cash_tendered_cents, card.data.change_cents], ['card', null, null]);
     const cash = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'cash', cashTenderedCents: 100_000, items });
@@ -131,7 +132,7 @@ test('cashiers record card or cash: counter sales, table bill-outs and Unpaid ta
     const table = (await request('/api/tables', pos)).data[0];
     await request('/api/orders', pos, { clientId: crypto.randomUUID(), payLater: true, items, table: { tableId: table.id, guests: 2 } });
     const bill = (await request(`/api/tables/${table.id}/bill`, pos)).data.orders, total = bill.reduce((n, o) => n + o.total_cents, 0);
-    const paid = await request(`/api/tables/${table.id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'card', totalCents: total });
+    const paid = await request(`/api/tables/${table.id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'card', paymentReference: 'AUTH-1002', totalCents: total });
     assert.equal(paid.status, 200, JSON.stringify(paid.data));
     assert.deepEqual([paid.data.payment_method, paid.data.cash_tendered_cents, paid.data.change_cents], ['card', null, null]);
 
@@ -150,7 +151,7 @@ test('cashiers record card or cash: counter sales, table bill-outs and Unpaid ta
     await act('visit.event', visitId, { event: 'bill_requested_at' });
     const { totals } = await import('../dining-domain.js');
     const due = totals((await request('/api/dining/state', owner)).data.visits[visitId], 0.12).total_cents;
-    await act('visit.settle', visitId, { payment_method: 'card', total_cents: due });
+    await act('visit.settle', visitId, { payment_method: 'card', payment_reference: 'AUTH-1003', total_cents: due });
     const visit = (await request('/api/dining/state', owner)).data.visits[visitId];
     assert.deepEqual([visit.payment_method, visit.cash_cents, visit.change_cents], ['card', null, null]);
 
@@ -159,5 +160,65 @@ test('cashiers record card or cash: counter sales, table bill-outs and Unpaid ta
     assert.deepEqual(r.orders.map((o) => o.paid_by).sort(), ['Card', 'Card', 'Card', 'Cash', 'Cash']);
     assert.equal(r.summary.card_cents + r.summary.cash_cents, r.summary.gross_cents);
     assert.equal(r.summary.card_cents, card.data.total_cents + total + due);
+  } finally { await server.close(); }
+});
+
+test('every payment other than cash needs a reference number, and it reaches the history and the report', async () => {
+  const server = await launch();
+  try {
+    const { request, login } = server, pos = await login('pos'), owner = await login('admin');
+    const menu = (await request('/api/menu', pos)).data.items, kebab = menu.find((m) => m.name === 'Spicy Chicken Kebab'), items = [{ menuItemId: kebab.id, qty: 1 }];
+    const tables = (await request('/api/tables', pos)).data;
+    const need = 'Enter the reference number from the card slip or payment app';
+
+    // Counter sale: no reference or an unusable one is refused, and cash needs none.
+    for (const paymentReference of [undefined, '', '  ', 'ab', 'bad<ref>']) {
+      const refused = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'qr', paymentReference, items });
+      assert.deepEqual([refused.status, refused.data.error], [400, need]);
+    }
+    const qr = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'qr', paymentReference: ' 0012 3456-7890 ', items });
+    assert.equal(qr.status, 201);
+    assert.deepEqual([qr.data.payment_method, qr.data.payment_reference, qr.data.cash_tendered_cents], ['qr', '0012 3456-7890', null]);
+    const cash = await request('/api/orders', pos, { clientId: crypto.randomUUID(), paymentMethod: 'cash', paymentReference: 'IGNORED', cashTenderedCents: 10_000_000, items });
+    assert.equal(cash.data.payment_reference, null, 'cash has no reference');
+
+    // Table bill: refused without one, and nothing is paid.
+    await request('/api/orders', pos, { clientId: crypto.randomUUID(), payLater: true, table: { tableId: tables[0].id, guests: 2 }, items });
+    const due = (await request(`/api/tables/${tables[0].id}/bill`, pos)).data.orders.reduce((n, o) => n + o.total_cents, 0);
+    const pay = (body) => request(`/api/tables/${tables[0].id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'card', totalCents: due, ...body });
+    assert.deepEqual([(await pay({})).status, (await pay({})).data.error], [400, need]);
+    assert.ok((await request('/api/tables', pos)).data.find((t) => t.id === tables[0].id).party, 'still at the table');
+    const paid = await pay({ paymentReference: 'CARD778899' });
+    assert.equal(paid.status, 200, JSON.stringify(paid.data));
+    assert.equal(paid.data.payment_reference, 'CARD778899');
+
+    // Unpaid tabs: the settlement is refused without one.
+    let clock = Date.now() - 60_000;
+    const act = async (type, target, payload) => {
+      const state = (await request('/api/dining/state', owner)).data, record = type.startsWith('table.') ? state.tables[target] : state.visits[target];
+      const op = { id: crypto.randomUUID(), deviceId: 't', at: new Date(clock += 1000).toISOString(), type, targetId: target, expectedVersion: record?.version ?? 0, payload };
+      return (await request('/api/dining/sync', pos, { operations: [op] })).data.results[0];
+    };
+    const tableId = crypto.randomUUID(), visitId = crypto.randomUUID();
+    await request('/api/dining/sync', owner, { operations: [{ id: crypto.randomUUID(), deviceId: 't', at: new Date(clock += 1000).toISOString(), type: 'table.save', targetId: tableId, expectedVersion: 0, payload: { name: 'Garden 9', active: true } }] });
+    await act('table.seat', tableId, { visitId, guests: 2 });
+    await act('visit.submit', visitId, { submissionId: crypto.randomUUID(), lines: [{ id: crypto.randomUUID(), menu_item_id: kebab.id, name: kebab.name, unit_price_cents: kebab.price_cents, sends_to_kitchen: 1, qty: 1, note: '' }] });
+    await act('visit.event', visitId, { event: 'bill_requested_at' });
+    const total = totals((await request('/api/dining/state', owner)).data.visits[visitId], 0.12).total_cents;
+    const missing = await act('visit.settle', visitId, { payment_method: 'qr', total_cents: total });
+    assert.equal(missing.status, 'conflict'); assert.equal(missing.error, need);
+    assert.equal((await act('visit.settle', visitId, { payment_method: 'qr', payment_reference: 'GCASH-5551234', total_cents: total })).status, 'applied');
+
+    // The report carries each one.
+    const day = today();
+    const r = (await request(`/api/admin/sales-report?from=${day}&to=${day}`, owner)).data;
+    assert.deepEqual(r.orders.filter((o) => o.reference).map((o) => [o.paid_by, o.reference]).sort(), [['Card', 'CARD778899'], ['QR / App', '0012 3456-7890'], ['QR / App', 'GCASH-5551234']]);
+    assert.equal(r.orders.find((o) => o.paid_by === 'Cash').reference, '');
+    assert.equal(r.summary.card_cents + r.summary.cash_cents + r.summary.qr_cents, r.summary.gross_cents);
+    assert.equal(r.summary.qr_cents, qr.data.total_cents + total);
+
+    // The till's order list and the owner's day view have it too.
+    assert.ok(JSON.stringify((await request('/api/pos/today', pos)).data).includes('CARD778899'));
+    assert.ok(JSON.stringify((await request('/api/admin/day', owner)).data).includes('GCASH-5551234'));
   } finally { await server.close(); }
 });

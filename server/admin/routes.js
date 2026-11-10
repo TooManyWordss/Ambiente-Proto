@@ -11,6 +11,7 @@ import { app, screenCounts, storeBroadcast } from '../core/http.js';
 import { menuItemProblem } from '../menu/routes.js';
 import { tableHeat } from '../tables/metrics.js';
 import { receiptLabel } from '../auth/sessions.js';
+import { paymentLabel } from '../../dining-domain.js';
 
 // ---------- Admin: every day ----------
 
@@ -57,7 +58,7 @@ app.get('/api/admin/sales-report', (req, res) => {
       item_count: lines.reduce((n, i) => n + i.qty, 0),
       subtotal_cents: o.subtotal_cents, discount_cents: o.discount_cents ?? 0, discount: discount?.label ?? (o.discount_cents ? 'Discount' : ''),
       tax_cents: o.tax_cents, total_cents: o.total_cents, cash_cents: o.cash_tendered_cents, change_cents: o.change_cents,
-      paid_by: o.status === 'paid' ? (o.payment_method === 'card' ? 'Card' : 'Cash') : '',
+      paid_by: o.status === 'paid' ? paymentLabel(o.payment_method) : '', reference: o.payment_reference ?? '',
       paid_time: o.status === 'paid' ? clockOf(o.paid_at ?? o.created_at) : '', staff: o.staff_name ?? '',
       billed_by: o.billed_by_name ?? (o.visit_id && o.status === 'paid' ? o.staff_name ?? '' : ''),
       edits: o.edit_count ?? 0, void_reason: o.status === 'voided' ? o.void_reason ?? '' : '',
@@ -77,7 +78,7 @@ app.get('/api/admin/sales-report', (req, res) => {
   res.json({
     from, to, store: req.store,
     summary: { ...add(paid), average_order_cents: paid.length ? Math.round(add(paid).gross_cents / paid.length) : 0,
-      cash_cents: add(paid.filter((o) => o.paid_by === 'Cash')).gross_cents, card_cents: add(paid.filter((o) => o.paid_by === 'Card')).gross_cents,
+      cash_cents: add(paid.filter((o) => o.paid_by === 'Cash')).gross_cents, card_cents: add(paid.filter((o) => o.paid_by === 'Card')).gross_cents, qr_cents: add(paid.filter((o) => o.paid_by === paymentLabel('qr'))).gross_cents,
       voided: voided.length, voided_cents: voided.reduce((n, o) => n + o.total_cents, 0), unpaid: orders.filter((o) => o.status === 'open').length,
       edited: orders.filter((o) => o.edits).length },
     byDay: group('date').map((d) => ({ ...d, day: WEEKDAYS[new Date(`${d.date}T12:00:00`).getDay()] })), byHour: group('hour'),

@@ -1,3 +1,4 @@
+import { paymentLabel } from '../../../dining-domain.js';
 // ESC/POS receipt printing for thermal printers such as the common 58 mm "58H" models.
 // The receipt is built as printer commands (text, bold, double size, cut) and sent one of three ways:
 //   rawbt – the RawBT Android app, which passes it on over USB or Bluetooth (works with almost any printer)
@@ -9,7 +10,7 @@ export type ReceiptLine = { name?: string; qty: number; unit_price_cents?: numbe
 export type ReceiptData = {
   label: string; station?: string; created_at?: string; items?: ReceiptLine[];
   subtotal_cents?: number; discount_cents?: number; discount_label?: string | null; discount_lines?: { label: string; cents: number }[]; discount_ids?: string[]; tax_cents?: number; total_cents?: number;
-  cash_tendered_cents?: number | null; change_cents?: number | null; payment_method?: string | null;
+  cash_tendered_cents?: number | null; change_cents?: number | null; payment_method?: string | null; payment_reference?: string | null;
   table_name?: string | null; guests?: number | null; staff_name?: string | null;
   offline?: boolean; reprint?: boolean; test?: boolean; heading?: string;
   // A kitchen slip for an order that changed after it was sent: "ORDER CHANGED", "CANCELLED".
@@ -109,7 +110,7 @@ export function encodeReceipt(r: ReceiptData, settings: ReceiptSettings, options
   if (r.tax_cents) p.row('Tax', peso(r.tax_cents));
   // Double-width text fits half as many characters.
   p.bold(true).size(true, false).row('TOTAL', peso(r.total_cents), half).size(false, false).bold(false);
-  if (r.payment_method === 'card') p.row('Paid by', 'CARD');
+  if (r.payment_method === 'card' || r.payment_method === 'qr') { p.row('Paid by', paymentLabel(r.payment_method).toUpperCase()); if (r.payment_reference) p.line(`Ref: ${r.payment_reference}`); }
   else if (r.cash_tendered_cents != null) p.row('Cash', peso(r.cash_tendered_cents)).row('Change', peso(r.change_cents ?? 0));
   p.rule('=').align('center');
   for (const f of settings.footer ?? []) p.line(f.length + 4 <= options.columns ? `* ${f} *` : f);
@@ -229,10 +230,18 @@ export type BleChannel = { service: string; characteristic: string; write: boole
 // the link has dropped (printer asleep, switched off, out of range), because the old one is dead after that.
 type BleTarget = { device: any; name: string; channels: BleChannel[]; at: number; char: any; slot: PrinterSlot };
 const bleTargets: Partial<Record<PrinterSlot, BleTarget>> = {};
+// A printer that's off can leave Android waiting for half a minute; this gives up sooner and tries again later.
+const LINK_TIMEOUT = 15_000;
+async function connectGatt(device: any) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([device.gatt.connect(), new Promise((_, fail) => { timer = setTimeout(() => { fail(Object.assign(new Error('The Bluetooth printer didn’t answer. Check that it’s switched on and nearby.'), { unreachable: true })); device.gatt.disconnect(); }, LINK_TIMEOUT); })]);
+  } finally { clearTimeout(timer); }
+}
 async function bleCharacteristic(target: BleTarget) {
   const { device, channels, at } = target, channel = channels[at];
   if (!target.char || !device.gatt.connected || target.char.uuid !== channel.characteristic) {
-    const server = await device.gatt.connect();
+    const server: any = await connectGatt(device);
     target.char = await (await server.getPrimaryService(channel.service)).getCharacteristic(channel.characteristic);
   }
   return target.char;
@@ -255,9 +264,13 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Chrome forgets the printer when the page reloads. Where it allows it (getDevices), the printer picked
 // last time is found again without a tap, by the id (or name) remembered on this tablet.
 const BLE_NAME_KEY = '5way.blePrinter', BLE_ID_KEY = '5way.blePrinterId';
+const linkDrops = new EventTarget(), watchedBle = new WeakSet<object>();
 async function attachBle(device: any, slot: PrinterSlot) {
-  const server = await device.gatt.connect();
-  device.addEventListener?.('gattserverdisconnected', () => { for (const t of Object.values(bleTargets)) if (t?.device === device) t.char = null; });
+  const server: any = await connectGatt(device);
+  if (!watchedBle.has(device)) {
+    watchedBle.add(device);
+    device.addEventListener?.('gattserverdisconnected', () => { for (const t of Object.values(bleTargets)) if (t?.device === device) t.char = null; linkDrops.dispatchEvent(new Event('drop')); });
+  }
   const channels: BleChannel[] = [];
   for (const uuid of BLE_SERVICES) {
     try {
@@ -316,6 +329,7 @@ async function sendBle(bytes: Uint8Array, slot: PrinterSlot) {
         lastBleReport = report(target, size, mode, bytes.length, pieces, tries, true);
         return;
       } catch (e) {
+        if ((e as { unreachable?: boolean }).unreachable) throw e;
         target.char = null; lastError = e as Error;
         lastBleReport = report(target, size, mode, bytes.length, pieces, tries, false, lastError.message);
         // After part of the receipt printed, trying again would print that part twice, so stop here.
@@ -349,17 +363,64 @@ export async function connectPrinter(method: PrintMethod, slot: PrinterSlot = 'r
 
 // Finds the printer used before on this tablet without a tap, where the browser allows it. Null if it can't.
 export async function reconnectPrinter(method: PrintMethod, slot: PrinterSlot = 'receipt'): Promise<string | null> {
-  if (method === 'ble') return bleTargets[slot] || await bleFromEarlier(slot).catch(() => false) ? bleTargets[slot]!.name : null;
+  await relink(method, slot);
+  return connectedPrinter(method, slot);
+}
+async function linkNow(method: PrintMethod, slot: PrinterSlot) {
   if (method === 'usb' && !usbDevices[slot]) {
     const known = await knownUsb(slot);
-    if (known) await openUsb(known, slot).catch(() => null);
+    if (known) await openUsb(known, slot);
   }
-  return connectedPrinter(method, slot);
+  if (method !== 'ble') return;
+  const target = bleTargets[slot];
+  if (!target) await bleFromEarlier(slot);
+  else if (!target.device.gatt.connected) { target.char = null; await connectGatt(target.device); }
+}
+// One attempt per printer at a time; a print for that printer waits for it (see sendNow).
+const relinks: Partial<Record<PrinterSlot, Promise<void>>> = {};
+function relink(method: PrintMethod, slot: PrinterSlot) {
+  return relinks[slot] ??= linkNow(method, slot).catch(() => {}).finally(() => { delete relinks[slot]; });
+}
+
+// Keeps the chosen printers linked with no tap: on opening the screen, when a link drops, when the Wi-Fi goes
+// off or comes back, and every few seconds until a missing printer answers. Printers don't need the internet.
+const LINK_RETRY = 15_000;
+export type PrinterLink = [PrintMethod, PrinterSlot];
+export function keepPrintersLinked(wanted: () => PrinterLink[], changed: (slot: PrinterSlot, name: string | null) => void) {
+  let stopped = false, soon = 0;
+  const check = () => {
+    for (const [method, slot] of wanted()) {
+      if (method !== 'ble' && method !== 'usb') continue;
+      changed(slot, connectedPrinter(method, slot));
+      void relink(method, slot).then(() => { if (!stopped) changed(slot, connectedPrinter(method, slot)); });
+    }
+  };
+  const nudge = () => { clearTimeout(soon); soon = window.setTimeout(check, 2000); };
+  const unplugged = (e: any) => { for (const [slot, usb] of Object.entries(usbDevices)) if (usb?.device === e.device) delete usbDevices[slot as PrinterSlot]; nudge(); };
+  const shown = () => { if (document.visibilityState === 'visible') nudge(); };
+  linkDrops.addEventListener('drop', nudge);
+  for (const name of ['online', 'offline']) window.addEventListener(name, nudge);
+  document.addEventListener('visibilitychange', shown);
+  usbApi()?.addEventListener?.('connect', nudge); usbApi()?.addEventListener?.('disconnect', unplugged);
+  const timer = window.setInterval(check, LINK_RETRY);
+  check();
+  return () => {
+    stopped = true; clearTimeout(soon); clearInterval(timer);
+    linkDrops.removeEventListener('drop', nudge);
+    for (const name of ['online', 'offline']) window.removeEventListener(name, nudge);
+    document.removeEventListener('visibilitychange', shown);
+    usbApi()?.removeEventListener?.('connect', nudge); usbApi()?.removeEventListener?.('disconnect', unplugged);
+  };
+}
+// What Printer settings shows while there's no link to a printer.
+export function printerWaitingText(method: PrintMethod, slot: PrinterSlot = 'receipt') {
+  if (!read(slotKey(method === 'ble' ? BLE_NAME_KEY : USB_KEY, slot)) || (method !== 'ble' && method !== 'usb')) return 'Not connected';
+  return method === 'ble' && !bleTargets[slot] && !(navigator as any).bluetooth?.getDevices ? 'Not connected. Tap Connect once: this browser can’t find it again by itself after a reload.' : 'Reconnecting…';
 }
 
 export function connectedPrinter(method: PrintMethod, slot: PrinterSlot = 'receipt') {
   if (method === 'usb') return usbDevices[slot]?.device.productName ?? null;
-  if (method === 'ble') return bleTargets[slot]?.name ?? null;
+  if (method === 'ble') return bleTargets[slot]?.device.gatt.connected ? bleTargets[slot]!.name : null;
   return null;
 }
 
@@ -372,6 +433,7 @@ export function sendToPrinter(method: PrintMethod, bytes: Uint8Array, slot: Prin
   return job;
 }
 async function sendNow(method: PrintMethod, bytes: Uint8Array, slot: PrinterSlot) {
+  await relinks[slot];
   if (method === 'rawbt') return sendRawBT(bytes);
   if (method === 'usb') return sendUsb(bytes, slot);
   if (method === 'ble') return sendBle(bytes, slot);

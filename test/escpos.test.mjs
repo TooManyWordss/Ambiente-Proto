@@ -51,6 +51,8 @@ test('the kitchen slip lists what to cook without prices and prints after the re
   assert.equal(both.length, receipt.length + slip.length);
   assert.ok(text(both).indexOf('Cash') < text(both).indexOf('KITCHEN'), 'receipt first, then the kitchen slip');
   // A card payment says so instead of cash and change.
+  const byQr = text(encodeReceipt({ ...order, payment_method: 'qr', payment_reference: 'GCASH-5551234', cash_tendered_cents: null, change_cents: null }, settings, { columns: 32, cut: false, drawer: false }));
+  assert.ok(byQr.includes('QR / APP') && byQr.includes('Ref: GCASH-5551234') && !byQr.includes('Change'), byQr);
   const byCard = text(encodeReceipt({ ...order, payment_method: 'card', cash_tendered_cents: null, change_cents: null }, settings, { columns: 32, cut: false, drawer: false }));
   assert.ok(byCard.includes('Paid by') && byCard.includes('CARD') && !byCard.includes('Change'));
   // The barista's slip has its own band, so the two stations' slips can't be mixed up.

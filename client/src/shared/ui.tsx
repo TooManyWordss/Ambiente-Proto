@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { logout } from './api';
 import { STORE_NAME, storeUrl } from './store';
-import type { User } from './types';
+import { paymentLabel } from '../../../dining-domain.js';
+import type { PayMethod, User } from './types';
 
 // Shown when the tablet has been updated but its café server is still the old one.
 export function RestartNeeded() {
@@ -35,9 +36,13 @@ export function Dialog({ title, children, onClose }: { title:string; children:Re
 export function StaffCode({ value, onChange }: { value: string; onChange: (code: string) => void }) {
   return <label className="staff-code">Your staff code<input type="text" className="secret" inputMode="numeric" autoComplete="off" maxLength={6} value={value} onChange={e => onChange(e.target.value.replace(/\D/g, ''))} required/></label>;
 }
-// How the customer paid, as the cashier taps it: Cash or Card.
-export function PayBy({ value, onChange }: { value: 'cash' | 'card'; onChange: (value: 'cash' | 'card') => void }) {
-  return <div className="pay-by" role="group" aria-label="How they paid">{(['cash', 'card'] as const).map(m => <button key={m} type="button" className={`btn ${value === m ? 'primary' : ''}`} aria-pressed={value === m} onClick={() => onChange(m)}>{m === 'cash' ? 'Cash' : 'Card'}</button>)}</div>;
+// The number from the card slip or payment app, needed before any payment that isn't cash.
+export function PaymentRef({ value, onChange }: { value: string; onChange: (reference: string) => void }) {
+  return <label className="payment-ref">Reference number<input type="text" autoComplete="off" maxLength={40} placeholder="From the card slip or payment app" value={value} onChange={e => onChange(e.target.value.replace(/[^A-Za-z0-9 -]/g, ''))} required/></label>;
+}
+// How the customer paid, as the cashier taps it: Cash, Card or QR / App.
+export function PayBy({ value, onChange }: { value: PayMethod; onChange: (value: PayMethod) => void }) {
+  return <div className="pay-by" role="group" aria-label="How they paid">{(['cash', 'card', 'qr'] as const).map(m => <button key={m} type="button" className={`btn ${value === m ? 'primary' : ''}`} aria-pressed={value === m} onClick={() => onChange(m)}>{paymentLabel(m)}</button>)}</div>;
 }
 // Actions used now and then (settings, sign-out) tucked behind one button, so the screen stays uncluttered.
 export function MoreMenu({ label = 'More', items }: { label?: string; items: { label: string; onClick: () => void; danger?: boolean }[] }) {

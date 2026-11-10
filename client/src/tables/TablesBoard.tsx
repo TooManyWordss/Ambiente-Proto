@@ -3,10 +3,12 @@ import { money, time } from '../shared/format';
 import type { DiningTable, TableChoice } from '../shared/types';
 import { FloorMap } from './FloorMap';
 import { minutesSince, tagName } from './tables';
+import { paymentLabel } from '../../../dining-domain.js';
+import type { PayMethod } from '../shared/types';
 
 // Choose a table for the next sale, see who's sitting where, and bill a table out.
 // With `onRequestBill` (the waiter's panel) a seated table asks the cashier for its bill instead of billing out.
-export function TablesBoard({ tables, chosenId, onChoose, onBillOut, onRequestBill, onTakeout, compact = false, quickSeat = false }: { tables: DiningTable[]; chosenId?: number | null; onChoose: (c: TableChoice) => void; onBillOut: (t: DiningTable) => void; onRequestBill?: (t: DiningTable, payBy: 'cash' | 'card') => void; onTakeout?: () => void; compact?: boolean; quickSeat?: boolean }) {
+export function TablesBoard({ tables, chosenId, onChoose, onBillOut, onRequestBill, onTakeout, compact = false, quickSeat = false }: { tables: DiningTable[]; chosenId?: number | null; onChoose: (c: TableChoice) => void; onBillOut: (t: DiningTable) => void; onRequestBill?: (t: DiningTable, payBy: PayMethod) => void; onTakeout?: () => void; compact?: boolean; quickSeat?: boolean }) {
   const [selectedId, setSelectedId] = useState<number | null>(chosenId ?? null), [guests, setGuests] = useState(2), [tag, setTag] = useState<'vip' | 'repeat' | null>(null);
   const t = tables.find(x => x.id === selectedId);
   useEffect(() => { setSelectedId(chosenId ?? null); }, [chosenId]);
@@ -21,8 +23,8 @@ export function TablesBoard({ tables, chosenId, onChoose, onBillOut, onRequestBi
       <p>Seated {time(t.party.seated_at)} · {minutesSince(t.party.seated_at)} min{t.party.guests ? ` · ${t.party.guests} guests` : ''}</p>
       <p>{t.party.receipts.map(r => `#${r.label} ${money(r.total_cents)} (${time(r.created_at)})${r.paid ? ' paid' : ''}`).join(' · ')}</p>
       <p className="table-bill">{t.party.unpaid_cents ? <>Bill so far <strong>{money(t.party.unpaid_cents)}</strong> · not paid yet</> : 'Everything is paid.'}</p>
-      {t.party.bill_requested_at && <p className="status warn">Bill requested{t.party.bill_requested_by ? ` by ${t.party.bill_requested_by}` : ''} · paying by {t.party.bill_pay_by === 'card' ? 'card' : 'cash'} · {time(t.party.bill_requested_at)}</p>}
-      <div className="sheet-actions">{onRequestBill ? (t.party.bill_requested_at ? <button className="btn primary" disabled>Waiting for the cashier</button> : (['cash', 'card'] as const).map(m => <button key={m} className="btn primary" disabled={!t.party!.unpaid_cents} onClick={() => onRequestBill(t, m)}>Request bill · {m === 'cash' ? 'Cash' : 'Card'}</button>)) : <button className="btn primary" onClick={() => onBillOut(t)}>Bill out</button>}<button className="btn" onClick={() => onChoose({ id: t.id, name: t.name, guests: t.party!.guests, tag: (t.party!.customer_tag as any) ?? null, seatedAt: t.party!.seated_at })}>Add an order to {t.name}</button></div>
+      {t.party.bill_requested_at && <p className="status warn">Bill requested{t.party.bill_requested_by ? ` by ${t.party.bill_requested_by}` : ''} · paying by {paymentLabel(t.party.bill_pay_by)} · {time(t.party.bill_requested_at)}</p>}
+      <div className="sheet-actions">{onRequestBill ? (t.party.bill_requested_at ? <button className="btn primary" disabled>Waiting for the cashier</button> : (['cash', 'card', 'qr'] as const).map(m => <button key={m} className="btn primary" disabled={!t.party!.unpaid_cents} onClick={() => onRequestBill(t, m)}>Request bill · {paymentLabel(m)}</button>)) : <button className="btn primary" onClick={() => onBillOut(t)}>Bill out</button>}<button className="btn" onClick={() => onChoose({ id: t.id, name: t.name, guests: t.party!.guests, tag: (t.party!.customer_tag as any) ?? null, seatedAt: t.party!.seated_at })}>Add an order to {t.name}</button></div>
     </> : <>
       <h3>{t.name} <span className="pill ready">Free</span> <span className="hint">{t.seats} seats</span></h3>
       <div className="table-form"><span>Guests</span><span className="qty"><button type="button" aria-label="One fewer guest" onClick={() => setGuests(g => Math.max(1, g - 1))}>−</button><span>{guests}</span><button type="button" aria-label="One more guest" onClick={() => setGuests(g => Math.min(50, g + 1))}>+</button></span>

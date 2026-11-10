@@ -1,5 +1,5 @@
 import { currentStore } from '../core/config.js';
-import { paymentMethod, prepStation, totals as diningTotals } from '../../dining-domain.js';
+import { NEEDS_REFERENCE, paymentMethod, paymentReference, prepStation, totals as diningTotals } from '../../dining-domain.js';
 import { TAX_RATE } from '../core/config.js';
 import { receiptLabel, requireRole, SELLERS, stationOf } from '../auth/sessions.js';
 import { dayRange, localDate, money } from '../core/dates.js';
@@ -75,8 +75,9 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
   try { bill = diningTotals({ discount, submissions: [{ lines: lines.map(l => ({ qty: l.qty, unit_price_cents: l.unit_price_cents })) }] }, TAX_RATE); }
   catch (e) { return res.status(400).json({ error: e.message }); }
   const { subtotal_cents: subtotal, tax_cents: tax, total_cents: total } = bill;
-  // Paid by card: no cash changes hands, so there's no cash received or change.
-  const paidBy = paymentMethod(req.body?.paymentMethod);
+  // Paid by card or QR: no cash changes hands, so there's no cash received or change, but a reference number.
+  const paidBy = paymentMethod(req.body?.paymentMethod), reference = payLater || paidBy === 'cash' ? null : paymentReference(req.body?.paymentReference);
+  if (!payLater && paidBy !== 'cash' && !reference) return res.status(400).json({ error: NEEDS_REFERENCE });
   let tendered = null;
   if (!payLater && paidBy === 'cash' && cashTenderedCents !== undefined && cashTenderedCents !== null) {
     if (!Number.isInteger(cashTenderedCents) || cashTenderedCents < 0) {
@@ -113,12 +114,12 @@ app.post('/api/orders', requireRole(...SELLERS), (req, res) => {
     orderId = Number(
       db
         .prepare(
-          `INSERT INTO orders (client_id, station, receipt_no, created_at, payment_method, subtotal_cents, tax_cents,
+          `INSERT INTO orders (client_id, station, receipt_no, created_at, payment_method, payment_reference, subtotal_cents, tax_cents,
              total_cents, kitchen_status, cash_tendered_cents, change_cents, staff_id, staff_name,
              table_id, table_name, guests, customer_tag, seated_at, discount_cents, discount_json, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(clientId, station, next, rungUpAt, payLater ? 'cash' : paidBy, subtotal, tax, total, kitchenStatus, tendered,
+        .run(clientId, station, next, rungUpAt, payLater ? 'cash' : paidBy, reference, subtotal, tax, total, kitchenStatus, tendered,
           tendered === null ? null : tendered - total, req.staff?.id ?? null, req.staff?.name ?? null,
           table?.id ?? null, table?.name ?? null, guests, customerTag, seatedAt, bill.discount_cents, JSON.stringify(discount), payLater ? 'open' : 'paid')
         .lastInsertRowid

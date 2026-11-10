@@ -91,7 +91,11 @@ export function totals(visit, taxRate = 0) {
 // whole bill, then shared across its orders by their subtotals, so the orders' own numbers add up to it.
 // A fixed discount is kept on each order as its part of the amount; other discounts apply to each as they are.
 // How the customer paid: by card, or in cash (anything else, including older records without a choice).
-export const paymentMethod = (value) => value === 'card' ? 'card' : 'cash';
+export const paymentMethod = (value) => value === 'card' || value === 'qr' ? value : 'cash';
+export const paymentLabel = (method) => method === 'card' ? 'Card' : method === 'qr' ? 'QR / App' : 'Cash';
+// The number on the card slip or in the payment app, which every payment other than cash must have. Null if it isn't usable.
+export const paymentReference = (value) => { const ref = String(value ?? '').trim(); return /^[A-Za-z0-9][A-Za-z0-9 -]{3,39}$/.test(ref) ? ref : null; };
+export const NEEDS_REFERENCE = 'Enter the reference number from the card slip or payment app';
 export function tableBill(orders, discount, taxRate = 0) {
   const bill = totals({ discount, submissions: orders.map(o => ({ lines: o.items })) }, taxRate);
   let discountLeft = bill.discount_cents, taxLeft = bill.tax_cents;
@@ -260,12 +264,14 @@ export function applyDining(input, operation, context) {
     // When cashiers have staff codes, the server checks the code and passes the cashier's name (or the problem).
     if (p.code_problem) fail(`${p.code_problem}. Settle it again with the cashier’s staff code.`);
     if (p.settled_by) visit.settled_by = text(p.settled_by, 'cashier', 40);
-    // Paid by card: the card covers the bill exactly, so there's no cash or change to record.
+    // Paid by card or QR: it covers the bill exactly, so there's no cash or change, but there is a reference number.
     visit.payment_method = paymentMethod(p.payment_method);
     if (visit.payment_method === 'cash') integer(p.cash_cents, 'cash tendered', visit.bill.total_cents);
+    else if (!paymentReference(p.payment_reference)) fail(NEEDS_REFERENCE);
     // Detect an offline bill that no longer matches the authoritative total.
     if (p.total_cents !== visit.bill.total_cents) fail('Bill total changed. Review the recorded cash and current bill.', 409);
     visit.cash_cents = visit.payment_method === 'cash' ? p.cash_cents : null; visit.change_cents = visit.payment_method === 'cash' ? p.cash_cents - visit.bill.total_cents : null;
+    visit.payment_reference = visit.payment_method === 'cash' ? null : paymentReference(p.payment_reference);
     visit.status = 'settled'; visit.settled_at = at;
   } else if (type === 'visit.cancel') {
     editable(); visit.cancel_reason = text(p.reason, 'cancellation reason'); visit.status = 'cancelled'; visit.cancelled_at = at;

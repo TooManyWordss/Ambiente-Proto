@@ -43,7 +43,7 @@ test('staff codes: every bill out, waiter order and stock change says who did it
 
     // Cashier: every bill out needs the cashier's code, and the bill says who.
     const due = (await request(`/api/tables/${tables[1].id}/bill`, pos)).data.orders.reduce((n, o) => n + o.total_cents, 0);
-    const pay = (body) => request(`/api/tables/${tables[1].id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'card', totalCents: due, ...body });
+    const pay = (body) => request(`/api/tables/${tables[1].id}/pay`, pos, { billId: crypto.randomUUID(), paymentMethod: 'card', paymentReference: 'AUTH-2001', totalCents: due, ...body });
     assert.equal((await pay({})).status, 403);
     const wrong = await pay({ staffCode: '0000' });
     assert.deepEqual([wrong.status, wrong.data.error], [403, 'That staff code isn’t right']);
@@ -53,7 +53,7 @@ test('staff codes: every bill out, waiter order and stock change says who did it
     // The owner's own login doesn't need a code.
     await order(owner, tables[2]);
     const ownerDue = (await request(`/api/tables/${tables[2].id}/bill`, owner)).data.orders.reduce((n, o) => n + o.total_cents, 0);
-    assert.equal((await request(`/api/tables/${tables[2].id}/pay`, owner, { billId: crypto.randomUUID(), paymentMethod: 'card', totalCents: ownerDue })).status, 200);
+    assert.equal((await request(`/api/tables/${tables[2].id}/pay`, owner, { billId: crypto.randomUUID(), paymentMethod: 'card', paymentReference: 'AUTH-2001', totalCents: ownerDue })).status, 200);
 
     // Inspector: every stock change needs the inspector's code.
     const stock = (await request('/api/admin/inventory', owner)).data.items.find((i) => i.name === 'Chicken Kebab');
@@ -84,10 +84,10 @@ test('staff codes: every bill out, waiter order and stock change says who did it
     await act('visit.submit', visitId, { submissionId: crypto.randomUUID(), lines: [{ id: crypto.randomUUID(), menu_item_id: kebab.id, name: kebab.name, unit_price_cents: kebab.price_cents, sends_to_kitchen: 1, qty: 1, note: '' }] });
     await act('visit.event', visitId, { event: 'bill_requested_at' });
     const total = totals((await request('/api/dining/state', owner)).data.visits[visitId], 0.12).total_cents;
-    const wrongSettle = await act('visit.settle', visitId, { payment_method: 'card', total_cents: total, staff_code: '9999' });
+    const wrongSettle = await act('visit.settle', visitId, { payment_method: 'card', payment_reference: 'AUTH-2002', total_cents: total, staff_code: '9999' });
     assert.equal(wrongSettle.status, 'conflict');
     assert.match(wrongSettle.error, /Wrong staff code/);
-    const settled = await act('visit.settle', visitId, { payment_method: 'card', total_cents: total, staff_code: '4821' });
+    const settled = await act('visit.settle', visitId, { payment_method: 'card', payment_reference: 'AUTH-2002', total_cents: total, staff_code: '4821' });
     assert.equal(settled.status, 'applied', JSON.stringify(settled));
     assert.equal((await request('/api/dining/state', owner)).data.visits[visitId].settled_by, 'Ana');
     const history = (await request('/api/dining/history', owner)).data;

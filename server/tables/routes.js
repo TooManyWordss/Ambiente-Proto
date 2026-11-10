@@ -5,7 +5,7 @@ import { db } from '../core/db.js';
 import { resized, tableSize } from './seed.js';
 import { attachItems, logActivity, saleTime } from '../sales/orders.js';
 import { app, notifyOwnerOverview, storeBroadcast } from '../core/http.js';
-import { paymentMethod, tableBill } from '../../dining-domain.js';
+import { NEEDS_REFERENCE, paymentLabel, paymentMethod, paymentReference, tableBill } from '../../dining-domain.js';
 import { getSetting, setSetting } from '../core/settings.js';
 
 // ---------- Tables ----------
@@ -73,7 +73,7 @@ app.post('/api/tables/:id/request-bill', requireRole(...SELLERS), (req, res) => 
   if (!openTableOrders(table.id).some((o) => o.status === 'open')) return res.status(409).json({ error: `${table.name} has nothing to pay` });
   const by = req.staff?.name ?? (req.role === 'barista' ? 'Waiter' : 'Cashier'), payBy = paymentMethod(req.body?.paymentMethod);
   db.prepare('UPDATE floor_tables SET bill_requested_at = COALESCE(bill_requested_at, ?), bill_requested_by = COALESCE(bill_requested_by, ?), bill_pay_by = ? WHERE id = ?').run(new Date().toISOString(), by, payBy, table.id);
-  logActivity(req, 'table.bill_requested', `${by} asked for ${table.name}'s bill (paying by ${payBy})`);
+  logActivity(req, 'table.bill_requested', `${by} asked for ${table.name}'s bill (paying by ${paymentLabel(payBy)})`);
   announceTables();
   storeBroadcast('pos').emit('bill.requested', { table_id: table.id, table_name: table.name, by, pay_by: payBy });
   res.json({ ok: true });
@@ -128,7 +128,7 @@ export function paidBill(billId) {
     created_at: first.paid_at, staff_name: orders.at(-1).staff_name, labels: orders.map((o) => receiptLabel(o)), order_ids: orders.map((o) => o.id),
     items: orders.flatMap((o) => o.items), subtotal_cents: sum('subtotal_cents'), discount_cents: sum('discount_cents'), tax_cents: sum('tax_cents'), total_cents: sum('total_cents'),
     discount_json: JSON.stringify(discount?.kind === 'fixed' ? { ...discount, value: sum('discount_cents') } : discount),
-    cash_tendered_cents: first.cash_tendered_cents, change_cents: first.change_cents, payment_method: first.payment_method, billed_by_name: first.billed_by_name,
+    cash_tendered_cents: first.cash_tendered_cents, change_cents: first.change_cents, payment_method: first.payment_method, payment_reference: first.payment_reference, billed_by_name: first.billed_by_name,
   };
 }
 
@@ -154,8 +154,9 @@ app.post('/api/tables/:id/pay', requireRole('pos'), (req, res) => {
   try { bill = tableBill(unpaid, discount, TAX_RATE); } catch (e) { return res.status(400).json({ error: e.message }); }
   // The cashier took cash for the bill they saw; if an order changed since, they check it again.
   if (totalCents !== undefined && totalCents !== bill.total_cents) return res.status(409).json({ error: `${table.name}'s bill changed to ${money(bill.total_cents)}. Check it with the customer again.` });
-  // Paid by card: no cash received and no change.
-  const paidBy = paymentMethod(req.body?.paymentMethod);
+  // Paid by card or QR: no cash received and no change, but a reference number from the slip or app.
+  const paidBy = paymentMethod(req.body?.paymentMethod), reference = paidBy === 'cash' ? null : paymentReference(req.body?.paymentReference);
+  if (paidBy !== 'cash' && !reference) return res.status(400).json({ error: NEEDS_REFERENCE });
   if (paidBy === 'cash' && (!Number.isInteger(cashTenderedCents) || cashTenderedCents < bill.total_cents)) return res.status(400).json({ error: 'Cash received is less than the bill' });
   const cash = paidBy === 'cash' ? cashTenderedCents : null;
   // A payment taken while the till was offline keeps the time it was taken.
@@ -163,13 +164,13 @@ app.post('/api/tables/:id/pay', requireRole('pos'), (req, res) => {
   db.exec('BEGIN');
   try {
     const pay = db.prepare(`UPDATE orders SET status = 'paid', subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?, discount_json = ?,
-      cash_tendered_cents = ?, change_cents = ?, payment_method = ?, billed_by_name = ?, bill_id = ?, paid_at = ?, version = version + 1 WHERE id = ? AND status = 'open'`);
-    for (const o of bill.orders) pay.run(o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents, JSON.stringify(o.discount), cash, change, paidBy, req.staff?.name ?? null, billId, now, o.id);
+      cash_tendered_cents = ?, change_cents = ?, payment_method = ?, payment_reference = ?, billed_by_name = ?, bill_id = ?, paid_at = ?, version = version + 1 WHERE id = ? AND status = 'open'`);
+    for (const o of bill.orders) pay.run(o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents, JSON.stringify(o.discount), cash, change, paidBy, reference, req.staff?.name ?? null, billId, now, o.id);
     const free = db.prepare('UPDATE orders SET billed_out_at = ? WHERE id = ?');
     for (const o of open) free.run(now, o.id);
     clearBillRequest(table.id);
     const stay = Math.round((Date.parse(now) - Date.parse(open[0].seated_at ?? open[0].created_at)) / 60000);
-    logActivity(req, 'table.paid', `${table.name} paid ${money(bill.total_cents)}${bill.discount_cents ? ` (discount ${money(bill.discount_cents)})` : ''} ${paidBy === 'card' ? 'by card' : `in cash, change ${money(change)}`}, and billed out after ${stay} min · ${unpaid.map((o) => `#${receiptLabel(o)}`).join(', ')}`);
+    logActivity(req, 'table.paid', `${table.name} paid ${money(bill.total_cents)}${bill.discount_cents ? ` (discount ${money(bill.discount_cents)})` : ''} ${paidBy === 'cash' ? `in cash, change ${money(change)}` : `by ${paymentLabel(paidBy)}, ref ${reference}`}, and billed out after ${stay} min · ${unpaid.map((o) => `#${receiptLabel(o)}`).join(', ')}`);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
