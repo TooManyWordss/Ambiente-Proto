@@ -47,6 +47,8 @@ export function Admin() {
       else{await api('/api/inventory/items',{method:'POST',body:{...body,quantity:count}});notify(`${body.name} added`);}
       setStockForm(null);refresh();}catch(err){notify((err as Error).message);}}
   const [confirmLogout,setConfirmLogout]=useState(false),[resetting,setResetting]=useState(false),[resetBusy,setResetBusy]=useState(false),[resetError,setResetError]=useState('');
+  // The owner renames someone or moves them to another position; the person's code follows them.
+  const [staffEdit,setStaffEdit]=useState<any|null>(null);
   // Owner, with the owner password: every sales figure back to zero (a copy is kept on the server first).
   async function resetStatistics(e:FormEvent<HTMLFormElement>){e.preventDefault();setResetBusy(true);setResetError('');try{const r=await api<{cleared:number}>('/api/admin/reset-statistics',{method:'POST',body:{password:String(new FormData(e.currentTarget).get('password')??'')},redirectOnUnauthorized:false});setResetting(false);notify(`Statistics reset to zero · ${r.cleared} orders cleared`);refresh();window.dispatchEvent(new Event('dining.live'));}catch(err){setResetError((err as Error).message);}finally{setResetBusy(false);}}
   const [menu,setMenu]=useState<MenuItem[]>([]),[recipes,setRecipes]=useState<Recipe[]>([]),[prep,setPrep]=useState<PrepRow[]>([]),[editOrder,setEditOrder]=useState<Order|null>(null),[tables,setTables]=useState<DiningTable[]>([]),[voidOrder,setVoidOrder]=useState<Order|null>(null);
@@ -63,8 +65,6 @@ export function Admin() {
   // Each person's own staff code (4–6 digits, unique), typed with every bill out, waiter order or stock change.
   async function setStaffCode(m:any){const code=prompt(`New staff code for ${m.name} (4 to 6 digits). Leave empty to remove their code.`);if(code===null)return;try{await api(`/api/admin/staff/${m.id}/staff-code`,{method:'POST',body:{code:code.trim()}});notify(code.trim()?`${m.name}’s staff code is set`:`${m.name}’s staff code is removed`);refresh();}catch(e){notify((e as Error).message);}}
   async function removeStaff(m:any){if(!confirm(`Remove ${m.name}? They will be signed out everywhere.`))return;try{await api(`/api/admin/staff/${m.id}`,{method:'DELETE'});refresh();}catch(e){notify((e as Error).message);}}
-  // The owner renames someone or moves them to another position; the person's code follows them.
-  const [staffEdit,setStaffEdit]=useState<any|null>(null);
   async function editStaff(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);try{const d=await api<any>(`/api/admin/staff/${staffEdit.id}`,{method:'PATCH',body:{name:f.get('name'),role:f.get('role')}});notify(`${d.name} saved`);setStaffEdit(null);refresh();}catch(err){notify((err as Error).message);}}
   async function setupCode(m:any){try{const d=await api<any>(`/api/admin/staff/${m.id}/code`,{method:'POST'});notify(`Setup code for ${d.name}: ${d.code.slice(0,4)} ${d.code.slice(4)} · expires ${time(d.expiresAt)}`);}catch(e){notify((e as Error).message);}}
   async function uploadOwnerKey(){try{const {options,challengeId}=await api<any>('/api/admin/passkeys/options',{method:'POST',body:{}});const response=await startRegistration({optionsJSON:options});await api('/api/passkeys/register',{method:'POST',body:{challengeId,response,device:'This device'}});notify('Owner passkey added');refresh();}catch(e){notify((e as Error).message);}}
