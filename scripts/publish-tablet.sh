@@ -22,5 +22,5 @@ git fetch -q "$REMOTE" tablet 2>/dev/null || true
 PARENT="$(git rev-parse -q --verify "$REMOTE/tablet" || true)"
 if [ -n "$PARENT" ] && [ "$(git rev-parse "$PARENT^{tree}")" = "$TREE" ]; then echo "The tablet branch already has this version."; exit 0; fi
 COMMIT="$(printf 'Tablet build of %s\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' "$(git rev-parse --short HEAD)" | git commit-tree "$TREE" ${PARENT:+-p "$PARENT"})"
-git push -q "$REMOTE" "$COMMIT:refs/heads/tablet"
+git -c http.postBuffer=524288000 push -q "$REMOTE" "$COMMIT:refs/heads/tablet"
 echo "Published $(git rev-parse --short "$COMMIT") to $REMOTE/tablet. On the tablet, type: cafe-update"
