@@ -12,7 +12,8 @@
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "concurrently -k \"node --watch --env-file-if-exists=.env server.js\" \"vite --config vite.config.ts\"",
     "build": "vite build --config vite.config.ts",
-    "dev:server": "node --watch --env-file-if-exists=.env server.js"
+    "dev:server": "node --watch --env-file-if-exists=.env server.js",
+    "publish-tablet": "bash scripts/publish-tablet.sh"
   },
   "engines": {
     "node": ">=22.13"
