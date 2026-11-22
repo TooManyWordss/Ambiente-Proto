@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.env
+*.db
+*.db-*
+cafe-backups
+uploads
+test
+.DS_Store
